@@ -645,3 +645,144 @@ func TestConcurrencyScaling(t *testing.T) {
 
 	fmt.Println()
 }
+
+// BenchmarkColdStart benchmarks engine creation + execution (no reuse)
+// This demonstrates the overhead of creating a new engine per request
+func BenchmarkColdStart(b *testing.B) {
+	code := testCases["simple_arithmetic"].code
+	trans := transpiler.New()
+	transpiled, _, _ := trans.Transpile(code)
+
+	b.Run("GOJA_cold_start", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			engine := goja.New(goja.Config{PoolSize: 1})
+			ctx := context.Background()
+			_, err := engine.Execute(ctx, transpiled, nil)
+			if err != nil {
+				b.Fatalf("execution error: %v", err)
+			}
+			engine.Close()
+		}
+	})
+
+	b.Run("GOJA_warm_reuse", func(b *testing.B) {
+		engine := goja.New(goja.Config{PoolSize: 1})
+		defer engine.Close()
+		ctx := context.Background()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			_, err := engine.Execute(ctx, transpiled, nil)
+			if err != nil {
+				b.Fatalf("execution error: %v", err)
+			}
+		}
+	})
+
+	// Bun cold start vs warm
+	if _, err := exec.LookPath("bun"); err != nil {
+		return
+	}
+
+	b.Run("Bun_cold_start", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			engine, err := bun.New(bun.Config{PoolSize: 1})
+			if err != nil {
+				b.Fatalf("engine creation error: %v", err)
+			}
+			if !engine.IsAvailable() {
+				b.Skip("Bun not available")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err = engine.Execute(ctx, code, nil)
+			cancel()
+			if err != nil {
+				b.Fatalf("execution error: %v", err)
+			}
+			engine.Close()
+		}
+	})
+
+	b.Run("Bun_warm_reuse", func(b *testing.B) {
+		engine, err := bun.New(bun.Config{PoolSize: 1})
+		if err != nil {
+			b.Fatalf("engine creation error: %v", err)
+		}
+		if !engine.IsAvailable() {
+			b.Skip("Bun not available")
+		}
+		defer engine.Close()
+
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err := engine.Execute(ctx, code, nil)
+			cancel()
+			if err != nil {
+				b.Fatalf("execution error: %v", err)
+			}
+		}
+	})
+
+	b.Run("Bun_background_warmup", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			// Engine creation is fast with background warmup
+			engine, err := bun.New(bun.Config{
+				PoolSize:         1,
+				BackgroundWarmup: true,
+			})
+			if err != nil {
+				b.Fatalf("engine creation error: %v", err)
+			}
+			if !engine.IsAvailable() {
+				b.Skip("Bun not available")
+			}
+			// First request may wait for process startup
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			_, err = engine.Execute(ctx, code, nil)
+			cancel()
+			if err != nil {
+				b.Fatalf("execution error: %v", err)
+			}
+			engine.Close()
+		}
+	})
+
+	// This benchmark shows that New() returns immediately with BackgroundWarmup
+	// This is useful when you want to do other initialization while the engine warms up
+	b.Run("Bun_parallel_init_blocking", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			// Blocking: must wait for engine before doing other work
+			engine, _ := bun.New(bun.Config{PoolSize: 1})
+			// Simulate other initialization work (50ms)
+			time.Sleep(50 * time.Millisecond)
+			// Execute
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			engine.Execute(ctx, code, nil)
+			cancel()
+			engine.Close()
+		}
+	})
+
+	b.Run("Bun_parallel_init_background", func(b *testing.B) {
+		b.ResetTimer()
+		for i := 0; i < b.N; i++ {
+			// Background: engine warms up while we do other work
+			engine, _ := bun.New(bun.Config{
+				PoolSize:         1,
+				BackgroundWarmup: true,
+			})
+			// Simulate other initialization work (50ms) - engine warms up in parallel
+			time.Sleep(50 * time.Millisecond)
+			// Execute - process may already be ready!
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			engine.Execute(ctx, code, nil)
+			cancel()
+			engine.Close()
+		}
+	})
+}

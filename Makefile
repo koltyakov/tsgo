@@ -53,6 +53,14 @@ monaco:
 	@echo "Starting Monaco editor at http://localhost:8080"
 	go run ./cmd/monaco
 
+# Statistical benchmark runner (generates markdown)
+benchmark-stats:
+	go run ./cmd/benchmark -runs=100
+
+# Statistical benchmark runner with output to file
+benchmark-stats-md:
+	go run ./cmd/benchmark -runs=100 -output=internal/benchmark/Results.md
+
 # Clean build artifacts
 clean:
 	rm -f coverage.out coverage.html
@@ -61,16 +69,18 @@ clean:
 # Show help
 help:
 	@echo "Available targets:"
-	@echo "  build      - Build the library"
-	@echo "  test       - Run all tests"
-	@echo "  test-v     - Run tests with verbose output"
-	@echo "  test-cover - Run tests with coverage report"
-	@echo "  bench      - Run benchmarks (quick)"
-	@echo "  bench-all  - Run benchmarks with multiple iterations"
-	@echo "  bench-goja - Run GOJA benchmarks only"
-	@echo "  bench-bun  - Run Bun benchmarks only"
-	@echo "  monaco     - Run Monaco editor example"
-	@echo "  fmt        - Format code"
-	@echo "  lint       - Run linter"
-	@echo "  tidy       - Tidy dependencies"
-	@echo "  clean      - Clean build artifacts"
+	@echo "  build           - Build the library"
+	@echo "  test            - Run all tests"
+	@echo "  test-v          - Run tests with verbose output"
+	@echo "  test-cover      - Run tests with coverage report"
+	@echo "  bench           - Run benchmarks (quick)"
+	@echo "  bench-all       - Run benchmarks with multiple iterations"
+	@echo "  bench-goja      - Run GOJA benchmarks only"
+	@echo "  bench-bun       - Run Bun benchmarks only"
+	@echo "  benchmark-stats - Run statistical benchmark (15 runs, markdown output)"
+	@echo "  benchmark-stats-md - Run statistical benchmark and save to file"
+	@echo "  monaco          - Run Monaco editor example"
+	@echo "  fmt             - Format code"
+	@echo "  lint            - Run linter"
+	@echo "  tidy            - Tidy dependencies"
+	@echo "  clean           - Clean build artifacts"

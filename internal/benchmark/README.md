@@ -11,6 +11,29 @@ Performance benchmarks comparing TypeScript execution engines.
 
 ## Running Benchmarks
 
+### Statistical Benchmark Runner (Recommended)
+
+The statistical benchmark runner executes each test multiple times and calculates
+mean, standard deviation, min, p50, and p95 values. It outputs reproducible
+markdown that can be directly copied to documentation.
+
+```bash
+# Run statistical benchmarks (15 runs per test case, outputs markdown)
+go run ./cmd/benchmark -runs=15
+
+# Save results to file
+go run ./cmd/benchmark -runs=15 -output=internal/benchmark/RESULTS.md
+
+# Using make targets
+make benchmark-stats      # Print to stdout
+make benchmark-stats-md   # Save to file
+
+# Output specific sections only
+go run ./cmd/benchmark -runs=15 -section=comparison   # Performance table only
+go run ./cmd/benchmark -runs=15 -section=concurrency  # Concurrency scaling only
+go run ./cmd/benchmark -runs=15 -section=detailed     # Full statistics only
+```
+
 ### Quick Tests (Human-readable output)
 
 ```bash
@@ -92,21 +115,21 @@ async_parallel            | N/A        | ✅          | Parallel async execution
 ```
 Test Case                 | GOJA            | Bun             | Winner
 --------------------------------------------------------------------------------
-simple_arithmetic         | ~54µs           | ~62µs           | GOJA (1.1x)
-string_operations         | ~61µs           | ~80µs           | GOJA (1.3x)
-regex_operations          | ~74µs           | ~175µs          | GOJA (2.4x)
-array_operations          | ~92µs           | ~83µs           | Bun (1.1x)
-type_guards               | ~74µs           | ~319µs          | GOJA (4.3x)
-generics                  | ~73µs           | ~352µs          | GOJA (4.8x)
-object_manipulation       | ~78µs           | ~314µs          | GOJA (4.0x)
-spread_destructure        | ~77µs           | ~107µs          | GOJA (1.4x)
-with_globals              | ~66µs           | ~247µs          | GOJA (3.7x)
-iterative_fibonacci       | ~117µs          | ~116µs          | Tie
-class_instantiation       | ~204µs          | ~491µs          | GOJA (2.4x)
-closure_heavy             | ~196µs          | ~440µs          | GOJA (2.2x)
-json_processing           | ~298µs          | ~409µs          | GOJA (1.4x)
-nested_loops              | ~818µs          | ~724µs          | Bun (1.1x)
-recursive_fibonacci       | ~1.4ms          | ~249µs          | Bun (5.6x)
+simple_arithmetic         | ~55µs           | ~70µs           | GOJA (1.3x)
+string_operations         | ~70µs           | ~70µs           | Tie
+regex_operations          | ~73µs           | ~109µs          | GOJA (1.5x)
+array_operations          | ~91µs           | ~144µs          | GOJA (1.6x)
+type_guards               | ~74µs           | ~103µs          | GOJA (1.4x)
+generics                  | ~70µs           | ~83µs           | GOJA (1.2x)
+object_manipulation       | ~82µs           | ~142µs          | GOJA (1.7x)
+spread_destructure        | ~76µs           | ~109µs          | GOJA (1.4x)
+with_globals              | ~64µs           | ~117µs          | GOJA (1.8x)
+iterative_fibonacci       | ~115µs          | ~125µs          | GOJA (1.1x)
+class_instantiation       | ~209µs          | ~294µs          | GOJA (1.4x)
+closure_heavy             | ~190µs          | ~110µs          | Bun (1.7x)
+json_processing           | ~281µs          | ~188µs          | Bun (1.5x)
+nested_loops              | ~827µs          | ~546µs          | Bun (1.5x)
+recursive_fibonacci       | ~1.4ms          | ~297µs          | Bun (4.7x)
 ```
 
 ### Concurrency Scaling
@@ -115,11 +138,35 @@ recursive_fibonacci       | ~1.4ms          | ~249µs          | Bun (5.6x)
                     GOJA                              Bun
 Concurrency  | Per Op      | Memory       | Per Op      | Memory
 ------------------------------------------------------------------------
-1            | 114µs       | 105KB        | 102µs       | 1.5KB
-4            | 296µs       | 426KB        | 195µs       | 6.2KB
-8            | 565µs       | 855KB        | 472µs       | 12.3KB
-16           | 983µs       | 1.7MB        | 1.34ms      | 24.7KB
-32           | 1.49ms      | 3.4MB        | 1.81ms      | 49.3KB
+1            | 114µs       | 105KB        | 101µs       | 1.5KB
+4            | 297µs       | 426KB        | 164µs       | 6.2KB
+8            | 565µs       | 856KB        | 248µs       | 12.4KB
+16           | 974µs       | 1.7MB        | 506µs       | 24.7KB
+32           | 1.45ms      | 3.4MB        | 1.11ms      | 49.4KB
+```
+
+### Cold Start vs Warm Reuse
+
+This benchmark demonstrates the critical importance of reusing engine instances
+rather than creating new ones per request.
+
+```
+Benchmark                 | Time          | Memory    | Allocs
+--------------------------------------------------------------------------------
+GOJA_cold_start           | 72µs          | 101KB     | 1,380
+GOJA_warm_reuse           | 57µs          | 71KB      | 1,105
+Bun_cold_start            | 126ms         | 23KB      | 150
+Bun_warm_reuse            | 50µs          | 1.3KB     | 24
+```
+
+**Key insight:** Bun cold start is **2,500x slower** than warm reuse (126ms vs 50µs).
+Always reuse engine instances in long-running applications!
+
+Use `BackgroundWarmup: true` to parallelize Bun startup with other initialization:
+```go
+engine, _ := bun.New(bun.Config{
+    BackgroundWarmup: true, // New() returns immediately, ~120ms startup happens in background
+})
 ```
 
 ### Raw Benchmark Results
@@ -127,43 +174,43 @@ Concurrency  | Per Op      | Memory       | Per Op      | Memory
 **GOJA Engine:**
 
 ```
-BenchmarkGOJA/GOJA_simple_arithmetic-14          21900      54242 ns/op      70899 B/op    1105 allocs/op
-BenchmarkGOJA/GOJA_string_operations-14          19386      61391 ns/op      78983 B/op    1219 allocs/op
-BenchmarkGOJA/GOJA_regex_operations-14           15972      73025 ns/op      96530 B/op    1376 allocs/op
-BenchmarkGOJA/GOJA_array_operations-14           13062      88931 ns/op     104638 B/op    1632 allocs/op
-BenchmarkGOJA/GOJA_type_guards-14                16696      71695 ns/op      93247 B/op    1408 allocs/op
-BenchmarkGOJA/GOJA_generics-14                   16425      71349 ns/op      93858 B/op    1432 allocs/op
-BenchmarkGOJA/GOJA_object_manipulation-14        15160      78188 ns/op     101606 B/op    1585 allocs/op
-BenchmarkGOJA/GOJA_spread_destructure-14         15328      76646 ns/op     102320 B/op    1554 allocs/op
-BenchmarkGOJA/GOJA_with_globals-14               17049      64940 ns/op      84415 B/op    1302 allocs/op
-BenchmarkGOJA/GOJA_iterative_fibonacci-14        10000     115753 ns/op     175522 B/op    2361 allocs/op
-BenchmarkGOJA/GOJA_class_instantiation-14         5926     199938 ns/op     184232 B/op    4114 allocs/op
-BenchmarkGOJA/GOJA_closure_heavy-14               5916     196887 ns/op     245796 B/op    3296 allocs/op
-BenchmarkGOJA/GOJA_json_processing-14             3856     294808 ns/op     333990 B/op    8051 allocs/op
-BenchmarkGOJA/GOJA_nested_loops-14                1447     818351 ns/op     226377 B/op   19706 allocs/op
-BenchmarkGOJA/GOJA_recursive_fibonacci-14          849    1396540 ns/op      76546 B/op    1202 allocs/op
+BenchmarkGOJA/GOJA_simple_arithmetic-14          22102      54556 ns/op      70907 B/op    1105 allocs/op
+BenchmarkGOJA/GOJA_string_operations-14          20011      69812 ns/op      78925 B/op    1219 allocs/op
+BenchmarkGOJA/GOJA_regex_operations-14           16129      73070 ns/op      97124 B/op    1377 allocs/op
+BenchmarkGOJA/GOJA_array_operations-14           13036      91398 ns/op     104664 B/op    1632 allocs/op
+BenchmarkGOJA/GOJA_type_guards-14                14574      73616 ns/op      93303 B/op    1408 allocs/op
+BenchmarkGOJA/GOJA_generics-14                   16856      69779 ns/op      93819 B/op    1432 allocs/op
+BenchmarkGOJA/GOJA_object_manipulation-14        15237      82283 ns/op     101674 B/op    1585 allocs/op
+BenchmarkGOJA/GOJA_spread_destructure-14         15633      75900 ns/op     102234 B/op    1554 allocs/op
+BenchmarkGOJA/GOJA_with_globals-14               18548      63904 ns/op      84444 B/op    1302 allocs/op
+BenchmarkGOJA/GOJA_iterative_fibonacci-14        10000     114880 ns/op     175526 B/op    2361 allocs/op
+BenchmarkGOJA/GOJA_class_instantiation-14         6103     209225 ns/op     184153 B/op    4114 allocs/op
+BenchmarkGOJA/GOJA_closure_heavy-14               6238     189893 ns/op     245854 B/op    3296 allocs/op
+BenchmarkGOJA/GOJA_json_processing-14             3948     280627 ns/op     333928 B/op    8051 allocs/op
+BenchmarkGOJA/GOJA_nested_loops-14                1465     827091 ns/op     226452 B/op   19706 allocs/op
+BenchmarkGOJA/GOJA_recursive_fibonacci-14          859    1402726 ns/op      76563 B/op    1202 allocs/op
 ```
 
 **Bun Engine:**
 
 ```
-BenchmarkBun/Bun_simple_arithmetic-14            21590      57548 ns/op       1369 B/op      25 allocs/op
-BenchmarkBun/Bun_string_operations-14            15195      81433 ns/op       1885 B/op      34 allocs/op
-BenchmarkBun/Bun_regex_operations-14              8479     136841 ns/op       2109 B/op      28 allocs/op
-BenchmarkBun/Bun_array_operations-14             13971      88016 ns/op       1485 B/op      25 allocs/op
-BenchmarkBun/Bun_type_guards-14                   3278     369322 ns/op       1846 B/op      25 allocs/op
-BenchmarkBun/Bun_generics-14                      3019     365683 ns/op       2842 B/op      57 allocs/op
-BenchmarkBun/Bun_object_manipulation-14           3950     324520 ns/op       3916 B/op      73 allocs/op
-BenchmarkBun/Bun_spread_destructure-14           10000     100454 ns/op       3160 B/op      56 allocs/op
-BenchmarkBun/Bun_with_globals-14                  4342     268869 ns/op       2223 B/op      35 allocs/op
-BenchmarkBun/Bun_iterative_fibonacci-14          10000     115345 ns/op       1435 B/op      25 allocs/op
-BenchmarkBun/Bun_class_instantiation-14           1818     591823 ns/op       1835 B/op      25 allocs/op
-BenchmarkBun/Bun_closure_heavy-14                 3392     512221 ns/op       1774 B/op      25 allocs/op
-BenchmarkBun/Bun_json_processing-14               3092     403749 ns/op       2069 B/op      31 allocs/op
-BenchmarkBun/Bun_nested_loops-14                  1807     701852 ns/op       1388 B/op      25 allocs/op
-BenchmarkBun/Bun_recursive_fibonacci-14           4551     262041 ns/op       1354 B/op      25 allocs/op
-BenchmarkBun/Bun_promise_chain-14                  194    6116226 ns/op       2342 B/op      26 allocs/op
-BenchmarkBun/Bun_async_parallel-14                 487    2309433 ns/op       1640 B/op      25 allocs/op
+BenchmarkBun/Bun_simple_arithmetic-14            18867      69829 ns/op       1369 B/op      25 allocs/op
+BenchmarkBun/Bun_string_operations-14            18396      70049 ns/op       1884 B/op      34 allocs/op
+BenchmarkBun/Bun_regex_operations-14             11150     109260 ns/op       2111 B/op      28 allocs/op
+BenchmarkBun/Bun_array_operations-14              9093     144187 ns/op       1484 B/op      25 allocs/op
+BenchmarkBun/Bun_type_guards-14                  10887     102976 ns/op       1837 B/op      25 allocs/op
+BenchmarkBun/Bun_generics-14                     14472      83473 ns/op       2835 B/op      57 allocs/op
+BenchmarkBun/Bun_object_manipulation-14           7237     142105 ns/op       3916 B/op      73 allocs/op
+BenchmarkBun/Bun_spread_destructure-14           11251     108958 ns/op       3160 B/op      56 allocs/op
+BenchmarkBun/Bun_with_globals-14                 10862     116842 ns/op       2223 B/op      35 allocs/op
+BenchmarkBun/Bun_iterative_fibonacci-14          10408     125348 ns/op       1435 B/op      25 allocs/op
+BenchmarkBun/Bun_class_instantiation-14           4560     293715 ns/op       1839 B/op      25 allocs/op
+BenchmarkBun/Bun_closure_heavy-14                10926     110330 ns/op       1773 B/op      25 allocs/op
+BenchmarkBun/Bun_json_processing-14               6564     188238 ns/op       2071 B/op      31 allocs/op
+BenchmarkBun/Bun_nested_loops-14                  2274     546141 ns/op       1387 B/op      25 allocs/op
+BenchmarkBun/Bun_recursive_fibonacci-14           4144     296696 ns/op       1355 B/op      25 allocs/op
+BenchmarkBun/Bun_promise_chain-14                  250    4850060 ns/op       1559 B/op      25 allocs/op
+BenchmarkBun/Bun_async_parallel-14                 508    2554001 ns/op       1661 B/op      25 allocs/op
 ```
 
 ## Key Findings
