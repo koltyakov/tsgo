@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sync"
 	"time"
 
 	"github.com/koltyakov/tsgo"
@@ -31,6 +32,43 @@ var globals = map[string]any{
 		"timeout": 5000,
 		"debug":   true,
 	},
+}
+
+// Shared executors - reused across requests for performance
+var (
+	gojaExec *tsgo.Executor
+	bunExec  *tsgo.Executor
+	execOnce sync.Once
+	execMu   sync.RWMutex
+)
+
+func initExecutors() {
+	execOnce.Do(func() {
+		// Create GOJA executor (always available)
+		gojaExec = tsgo.New(
+			tsgo.WithEngine(tsgo.EngineGOJA),
+			tsgo.WithTimeout(5*time.Second),
+			tsgo.WithGlobals(globals),
+		)
+
+		// Create Bun executor (may not be available)
+		bunExec = tsgo.New(
+			tsgo.WithEngine(tsgo.EngineBun),
+			tsgo.WithTimeout(5*time.Second),
+			tsgo.WithGlobals(globals),
+		)
+	})
+}
+
+func getExecutor(engine string) *tsgo.Executor {
+	initExecutors()
+	execMu.RLock()
+	defer execMu.RUnlock()
+
+	if engine == "bun" && bunExec != nil {
+		return bunExec
+	}
+	return gojaExec
 }
 
 func main() {
@@ -82,20 +120,8 @@ func main() {
 			return
 		}
 
-		// Select engine
-		var opts []tsgo.Option
-		opts = append(opts, tsgo.WithTimeout(5*time.Second))
-		opts = append(opts, tsgo.WithGlobals(globals))
-
-		switch req.Engine {
-		case "bun":
-			opts = append(opts, tsgo.WithEngine(tsgo.EngineBun))
-		default:
-			opts = append(opts, tsgo.WithEngine(tsgo.EngineGOJA))
-		}
-
-		exec := tsgo.New(opts...)
-		defer exec.Close()
+		// Get shared executor for the requested engine
+		exec := getExecutor(req.Engine)
 
 		ctx := context.Background()
 		result, err := exec.Execute(ctx, req.Code)
