@@ -2,6 +2,94 @@
 
 A secure TypeScript execution library for Go with multiple execution engines.
 
+## Use Case: User-Defined Business Logic
+
+tsgo enables **platforms** built in Go to safely execute **user-defined TypeScript** for customizable business logic — workflow conditions, automation handlers, data transformations, and more.
+
+```mermaid
+flowchart TB
+    subgraph Platform ["Go Platform (Backend)"]
+        direction TB
+        Engine["tsgo Engine"]
+        Contracts["Contract Analyzer"]
+        TypeDefs["Type Definitions"]
+        Runtime["Runtime Executor"]
+    end
+
+    subgraph Editor ["Monaco Editor (Frontend)"]
+        direction TB
+        Monaco["TypeScript Editor"]
+        Intellisense["IntelliSense"]
+        ContractView["Contract Preview"]
+        Mapper["Output Mapper"]
+    end
+
+    subgraph Business ["Business Context"]
+        Inputs["Inputs\n(order, user, config)"]
+        Outputs["Outputs\n(decisions, actions)"]
+        Objects["Business Objects\n(BPMN, Rules, Flows)"]
+    end
+
+    TypeDefs -->|"Types & Globals"| Monaco
+    Monaco -->|"User Script"| Contracts
+    Contracts -->|"Result Schema"| ContractView
+    ContractView --> Mapper
+    Mapper -->|"Mapped to"| Objects
+
+    Inputs -->|"Injected as globals"| Runtime
+    Objects -->|"Script reference"| Runtime
+    Runtime -->|"Execute"| Engine
+    Engine -->|"Result"| Outputs
+```
+
+### How It Works
+
+1. **Platform defines context** — The Go backend registers typed globals (e.g., `order: Order`, `user: User`) and interfaces that scripts can use
+2. **User writes logic** — In the Monaco editor with full IntelliSense, autocomplete, and type checking powered by the platform's type definitions
+3. **Contract extraction** — As the user types, the system analyzes the script and generates a contract (TypeScript types + JSON Schema) for the return value
+4. **Output mapping** — The user maps the script's output to business objects (e.g., "route to → approval workflow", "set priority → field")
+5. **Runtime execution** — When triggered, the Go backend executes the script with real data, returning typed, validated results
+
+### Example: Order Routing Handler
+
+```typescript
+// Platform provides: order, customer, config (with full types)
+const totalValue = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
+const isVIP = customer.tier === 'platinum' || customer.totalSpent > 100000;
+
+// Business logic in TypeScript
+const needsApproval = totalValue > config.approvalThreshold && !isVIP;
+const priority = isVIP ? 'high' : totalValue > 10000 ? 'medium' : 'normal';
+
+export default {
+  route: needsApproval ? 'approval-workflow' : 'fulfillment',
+  priority,
+  flags: {
+    vipCustomer: isVIP,
+    largeOrder: totalValue > 10000,
+  }
+};
+```
+
+**Generated Contract:**
+```typescript
+export type Result = {
+  route: string;
+  priority: string;
+  flags: { vipCustomer: boolean; largeOrder: boolean };
+};
+```
+
+The platform can then map `route` to a workflow selector, `priority` to a queue, and `flags` to audit fields — all with type safety and validation.
+
+### Benefits
+
+- **Type Safety** — Full TypeScript with platform-defined types eliminates runtime surprises
+- **Great UX** — Monaco editor with IntelliSense gives users IDE-quality editing
+- **Contract-Driven** — Output schemas enable visual mapping and validation before deployment
+- **Secure Execution** — Sandboxed runtime with controlled globals, no file/network access
+- **Pure Go Option** — GOJA engine requires no external dependencies for simple scripts
+
 ## Features
 
 - **Multiple Execution Engines**: GOJA (pure Go), Bun (requires installation)
