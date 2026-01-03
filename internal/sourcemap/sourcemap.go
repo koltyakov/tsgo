@@ -7,6 +7,19 @@ import (
 	"fmt"
 )
 
+// base64Lookup is a pre-computed lookup table for base64 character to index conversion.
+var base64Lookup = func() [256]int8 {
+	var table [256]int8
+	for i := range table {
+		table[i] = -1
+	}
+	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+	for i, c := range base64Chars {
+		table[c] = int8(i)
+	}
+	return table
+}()
+
 // SourceMap represents a parsed source map.
 type SourceMap struct {
 	Version        int      `json:"version"`
@@ -140,32 +153,23 @@ func decodeMappings(encoded string) []Mapping {
 	return mappings
 }
 
-// decodeVLQ decodes a single VLQ value.
+// decodeVLQ decodes a single VLQ value using pre-computed lookup table.
 func decodeVLQ(s string) (int, int) {
-	const base64Chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
-
 	var result, shift int
-	var continuation bool
 	consumed := 0
 
 	for i := 0; i < len(s); i++ {
-		idx := -1
-		for j, c := range base64Chars {
-			if byte(c) == s[i] {
-				idx = j
-				break
-			}
-		}
-		if idx == -1 {
+		idx := base64Lookup[s[i]]
+		if idx < 0 {
 			break
 		}
 
 		consumed++
-		continuation = (idx & 32) != 0
-		result += (idx & 31) << shift
+		result += (int(idx) & 31) << shift
 		shift += 5
 
-		if !continuation {
+		// Check continuation bit
+		if idx&32 == 0 {
 			break
 		}
 	}

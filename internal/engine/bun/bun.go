@@ -6,11 +6,13 @@ import (
 	"context"
 	_ "embed"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -38,13 +40,22 @@ type Engine struct {
 	config     Config
 	pool       *pool
 	workerPath string
+	tempDir    string // Track temp directory for cleanup
 	available  bool
+	closed     atomic.Bool
 }
 
 // New creates a new Bun execution engine.
 func New(cfg Config) (*Engine, error) {
 	if cfg.PoolSize <= 0 {
-		cfg.PoolSize = 4
+		// Default to half the CPUs (Bun processes are heavier)
+		cfg.PoolSize = runtime.NumCPU() / 2
+		if cfg.PoolSize < 2 {
+			cfg.PoolSize = 2
+		}
+		if cfg.PoolSize > 8 {
+			cfg.PoolSize = 8
+		}
 	}
 	if cfg.HealthCheckInterval <= 0 {
 		cfg.HealthCheckInterval = 5 * time.Second
@@ -72,7 +83,7 @@ func New(cfg Config) (*Engine, error) {
 	}
 
 	// Set up worker script
-	workerPath, err := setupWorkerScript(cfg.WorkerScript)
+	workerPath, tempDir, err := setupWorkerScript(cfg.WorkerScript)
 	if err != nil {
 		return nil, fmt.Errorf("failed to setup worker script: %w", err)
 	}
@@ -80,6 +91,7 @@ func New(cfg Config) (*Engine, error) {
 	engine := &Engine{
 		config:     cfg,
 		workerPath: workerPath,
+		tempDir:    tempDir,
 		available:  true,
 	}
 
@@ -93,19 +105,20 @@ func New(cfg Config) (*Engine, error) {
 }
 
 // setupWorkerScript sets up the worker script, either from config or embedded.
-func setupWorkerScript(customScript string) (string, error) {
+// Returns the worker path and temp directory (for cleanup).
+func setupWorkerScript(customScript string) (workerPath string, tempDir string, err error) {
 	if customScript != "" {
 		// Use custom script - write to temp file
-		tmpFile, err := os.CreateTemp("", "tsgo-worker-*.ts")
+		tmpDir, err := os.MkdirTemp("", "tsgo-worker")
 		if err != nil {
-			return "", err
+			return "", "", err
 		}
-		if _, err := tmpFile.WriteString(customScript); err != nil {
-			tmpFile.Close()
-			return "", err
+		path := filepath.Join(tmpDir, "custom_worker.ts")
+		if err := os.WriteFile(path, []byte(customScript), 0600); err != nil {
+			os.RemoveAll(tmpDir)
+			return "", "", err
 		}
-		tmpFile.Close()
-		return tmpFile.Name(), nil
+		return path, tmpDir, nil
 	}
 
 	// Use embedded worker
@@ -114,21 +127,31 @@ func setupWorkerScript(customScript string) (string, error) {
 	// Write to temp directory
 	tmpDir, err := os.MkdirTemp("", "tsgo-worker")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	workerPath := filepath.Join(tmpDir, "bun_worker.ts")
-	if err := os.WriteFile(workerPath, content, 0644); err != nil {
-		return "", err
+	path := filepath.Join(tmpDir, "bun_worker.ts")
+	if err := os.WriteFile(path, content, 0600); err != nil {
+		os.RemoveAll(tmpDir)
+		return "", "", err
 	}
 
-	return workerPath, nil
+	return path, tmpDir, nil
 }
 
 // Execute runs TypeScript code in a Bun process.
 func (e *Engine) Execute(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {
+	if e.closed.Load() {
+		return nil, errors.New("bun engine is closed")
+	}
+
 	if !e.available {
-		return nil, fmt.Errorf("bun engine is not available")
+		return nil, errors.New("bun engine is not available")
+	}
+
+	// Check context before expensive operations
+	if err := ctx.Err(); err != nil {
+		return nil, err
 	}
 
 	start := time.Now()
@@ -177,11 +200,26 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 }
 
 // Close releases engine resources.
+// It is idempotent and safe to call multiple times.
 func (e *Engine) Close() error {
+	if !e.closed.CompareAndSwap(false, true) {
+		return nil // Already closed
+	}
+
+	var errs []error
+
 	if e.pool != nil {
 		e.pool.close()
 	}
-	return nil
+
+	// Clean up temp directory
+	if e.tempDir != "" {
+		if err := os.RemoveAll(e.tempDir); err != nil {
+			errs = append(errs, fmt.Errorf("failed to clean up temp dir: %w", err))
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // IsAvailable returns true if Bun is installed and available.
@@ -194,8 +232,8 @@ type pool struct {
 	processes  []*process
 	bunPath    string
 	workerPath string
-	mu         sync.Mutex
-	closed     bool
+	mu         sync.RWMutex
+	closed     atomic.Bool
 	stopCh     chan struct{}
 	nextIdx    uint64 // for round-robin selection
 }
@@ -310,11 +348,11 @@ func (p *pool) startProcess() (*process, error) {
 }
 
 func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
-		return nil, nil, fmt.Errorf("pool is closed")
+	if p.closed.Load() {
+		return nil, nil, errors.New("pool is closed")
 	}
+
+	p.mu.RLock()
 
 	// Round-robin selection - each process can handle multiple concurrent requests
 	numProcs := len(p.processes)
@@ -331,18 +369,27 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 
 		// Check if process needs restart due to failures
 		if atomic.LoadInt32(&proc.failures) >= 3 {
-			p.processes[idx] = nil
-			go func(oldProc *process, pidx int) {
-				oldProc.close()
-				newProc, err := p.startProcess()
-				if err == nil {
-					p.mu.Lock()
-					if !p.closed {
-						p.processes[pidx] = newProc
+			p.mu.RUnlock()
+			p.mu.Lock()
+			// Double-check after acquiring write lock
+			if p.processes[idx] == proc && atomic.LoadInt32(&proc.failures) >= 3 {
+				p.processes[idx] = nil
+				go func(oldProc *process, pidx int) {
+					oldProc.close()
+					newProc, err := p.startProcess()
+					if err == nil && !p.closed.Load() {
+						p.mu.Lock()
+						if !p.closed.Load() && p.processes[pidx] == nil {
+							p.processes[pidx] = newProc
+						} else {
+							newProc.close()
+						}
+						p.mu.Unlock()
 					}
-					p.mu.Unlock()
-				}
-			}(proc, idx)
+				}(proc, idx)
+			}
+			p.mu.Unlock()
+			p.mu.RLock()
 			continue
 		}
 
@@ -350,14 +397,14 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 		if proc.ready {
 			proc.lastUsed = time.Now()
 			proc.mu.Unlock()
-			p.mu.Unlock()
+			p.mu.RUnlock()
 
 			// No release function needed - process handles concurrent requests
 			return proc, func() {}, nil
 		}
 		proc.mu.Unlock()
 	}
-	p.mu.Unlock()
+	p.mu.RUnlock()
 
 	// No ready processes, start a new one (this should be rare)
 	proc, err := p.startProcess()
@@ -379,13 +426,27 @@ func (p *pool) healthChecker(interval time.Duration) {
 		case <-p.stopCh:
 			return
 		case <-ticker.C:
-			p.mu.Lock()
-			for i, proc := range p.processes {
+			if p.closed.Load() {
+				return
+			}
+
+			p.mu.RLock()
+			processes := make([]*process, len(p.processes))
+			copy(processes, p.processes)
+			p.mu.RUnlock()
+
+			for i, proc := range processes {
 				if proc == nil {
 					// Start new process
 					newProc, err := p.startProcess()
 					if err == nil {
-						p.processes[i] = newProc
+						p.mu.Lock()
+						if !p.closed.Load() && p.processes[i] == nil {
+							p.processes[i] = newProc
+						} else {
+							newProc.close()
+						}
+						p.mu.Unlock()
 					}
 					continue
 				}
@@ -404,20 +465,19 @@ func (p *pool) healthChecker(interval time.Duration) {
 					atomic.StoreInt32(&proc.failures, 0)
 				}
 			}
-			p.mu.Unlock()
 		}
 	}
 }
 
 func (p *pool) close() {
+	if !p.closed.CompareAndSwap(false, true) {
+		return // Already closed
+	}
+
+	close(p.stopCh)
+
 	p.mu.Lock()
 	defer p.mu.Unlock()
-
-	if p.closed {
-		return
-	}
-	p.closed = true
-	close(p.stopCh)
 
 	for _, proc := range p.processes {
 		if proc != nil {

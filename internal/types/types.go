@@ -87,8 +87,22 @@ func DefaultConfig() ExecutorConfig {
 		Timeout:     Duration(30 * time.Second),
 		MemoryLimit: 64 * 1024 * 1024, // 64MB
 		SourceMaps:  true,
-		PoolSize:    4,
+		PoolSize:    0, // 0 means use default based on CPU count
 	}
+}
+
+// Validate checks if the configuration is valid.
+func (c *ExecutorConfig) Validate() error {
+	if c.Timeout < 0 {
+		return &ExecutionError{Message: "timeout cannot be negative"}
+	}
+	if c.MemoryLimit < 0 {
+		return &ExecutionError{Message: "memory limit cannot be negative"}
+	}
+	if c.PoolSize < 0 {
+		return &ExecutionError{Message: "pool size cannot be negative"}
+	}
+	return nil
 }
 
 // Result represents the result of a script execution.
@@ -117,11 +131,18 @@ type ExecutionError struct {
 	OriginalLine int
 	// Stack is the JavaScript stack trace.
 	Stack string
+	// Cause is the underlying error, if any.
+	Cause error
 }
 
 // Error implements the error interface.
 func (e *ExecutionError) Error() string {
 	return e.Message
+}
+
+// Unwrap returns the underlying cause for error chain support.
+func (e *ExecutionError) Unwrap() error {
+	return e.Cause
 }
 
 // ExecutionMetrics contains performance metrics for an execution.

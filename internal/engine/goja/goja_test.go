@@ -178,8 +178,10 @@ func TestPoolAcquireRelease(t *testing.T) {
 	p := newPool(2)
 	defer p.close()
 
+	ctx := context.Background()
+
 	// Acquire all runtimes
-	r1, release1, err := p.acquire()
+	r1, release1, err := p.acquire(ctx)
 	if err != nil {
 		t.Fatalf("failed to acquire: %v", err)
 	}
@@ -187,7 +189,7 @@ func TestPoolAcquireRelease(t *testing.T) {
 		t.Fatal("expected runtime")
 	}
 
-	r2, release2, err := p.acquire()
+	r2, release2, err := p.acquire(ctx)
 	if err != nil {
 		t.Fatalf("failed to acquire: %v", err)
 	}
@@ -195,17 +197,7 @@ func TestPoolAcquireRelease(t *testing.T) {
 		t.Fatal("expected runtime")
 	}
 
-	// Third should create temporary
-	r3, release3, err := p.acquire()
-	if err != nil {
-		t.Fatalf("failed to acquire: %v", err)
-	}
-	if r3 == nil {
-		t.Fatal("expected runtime")
-	}
-
-	// Release all
-	release3()
+	// Release all (no temporary runtime creation in new pool design)
 	release2()
 	release1()
 }
@@ -214,7 +206,8 @@ func TestPoolClosed(t *testing.T) {
 	p := newPool(2)
 	p.close()
 
-	_, _, err := p.acquire()
+	ctx := context.Background()
+	_, _, err := p.acquire(ctx)
 	if err == nil {
 		t.Error("expected error from closed pool")
 	}

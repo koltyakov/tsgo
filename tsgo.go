@@ -23,6 +23,8 @@ package tsgo
 
 import (
 	"context"
+	"errors"
+	"sync"
 	"time"
 
 	"github.com/koltyakov/tsgo/internal/engine"
@@ -68,12 +70,17 @@ const (
 )
 
 // Executor provides TypeScript execution capabilities.
+// It is safe for concurrent use.
 type Executor struct {
 	config     types.ExecutorConfig
 	transpiler *transpiler.Transpiler
 	gojaEng    *goja.Engine
 	bunEng     *bun.Engine
 	selector   *selector.Selector
+
+	// mu protects engine initialization to prevent data races.
+	mu     sync.RWMutex
+	closed bool
 }
 
 // Option configures an Executor.
@@ -142,8 +149,33 @@ func New(opts ...Option) *Executor {
 	}
 }
 
+// ErrExecutorClosed is returned when Execute is called on a closed executor.
+var ErrExecutorClosed = errors.New("executor is closed")
+
+// ErrEmptyCode is returned when empty code is provided.
+var ErrEmptyCode = errors.New("code cannot be empty")
+
 // Execute runs TypeScript code and returns the result.
+// It is safe for concurrent use.
 func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
+	// Check if executor is closed
+	e.mu.RLock()
+	if e.closed {
+		e.mu.RUnlock()
+		return nil, ErrExecutorClosed
+	}
+	e.mu.RUnlock()
+
+	// Validate input
+	if len(code) == 0 {
+		return nil, ErrEmptyCode
+	}
+
+	// Check context before expensive operations
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	// Validate security policy
 	if err := sandbox.ValidateCode(code, e.config.Security.RestrictedGlobals); err != nil {
 		return nil, &ExecutionError{
@@ -202,9 +234,24 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 }
 
 // getEngine returns the appropriate engine, creating it if necessary.
+// Uses double-checked locking for thread-safe lazy initialization.
 func (e *Executor) getEngine(engineType EngineType) (engine.Engine, error) {
 	switch engineType {
 	case EngineGOJA:
+		// Fast path: read lock to check if engine exists
+		e.mu.RLock()
+		if e.gojaEng != nil {
+			eng := e.gojaEng
+			e.mu.RUnlock()
+			return eng, nil
+		}
+		e.mu.RUnlock()
+
+		// Slow path: write lock to create engine
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		// Double-check after acquiring write lock
 		if e.gojaEng == nil {
 			e.gojaEng = goja.New(goja.Config{
 				PoolSize: e.config.PoolSize,
@@ -213,6 +260,20 @@ func (e *Executor) getEngine(engineType EngineType) (engine.Engine, error) {
 		return e.gojaEng, nil
 
 	case EngineBun:
+		// Fast path: read lock to check if engine exists
+		e.mu.RLock()
+		if e.bunEng != nil {
+			eng := e.bunEng
+			e.mu.RUnlock()
+			return eng, nil
+		}
+		e.mu.RUnlock()
+
+		// Slow path: write lock to create engine
+		e.mu.Lock()
+		defer e.mu.Unlock()
+
+		// Double-check after acquiring write lock
 		if e.bunEng == nil {
 			eng, err := bun.New(bun.Config{
 				PoolSize: e.config.PoolSize,
@@ -232,22 +293,33 @@ func (e *Executor) getEngine(engineType EngineType) (engine.Engine, error) {
 }
 
 // Close releases resources held by the executor.
+// It is idempotent and safe to call multiple times.
 func (e *Executor) Close() error {
-	var lastErr error
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.closed {
+		return nil // Already closed
+	}
+	e.closed = true
+
+	var errs []error
 
 	if e.gojaEng != nil {
 		if err := e.gojaEng.Close(); err != nil {
-			lastErr = err
+			errs = append(errs, err)
 		}
+		e.gojaEng = nil
 	}
 
 	if e.bunEng != nil {
 		if err := e.bunEng.Close(); err != nil {
-			lastErr = err
+			errs = append(errs, err)
 		}
+		e.bunEng = nil
 	}
 
-	return lastErr
+	return errors.Join(errs...)
 }
 
 // --- Type Generation ---

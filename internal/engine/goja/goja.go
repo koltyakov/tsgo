@@ -4,8 +4,10 @@ package goja
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/dop251/goja"
@@ -27,7 +29,14 @@ type Engine struct {
 // New creates a new GOJA execution engine.
 func New(cfg Config) *Engine {
 	if cfg.PoolSize <= 0 {
-		cfg.PoolSize = 8
+		// Default to number of CPUs, capped at 16
+		cfg.PoolSize = runtime.NumCPU()
+		if cfg.PoolSize > 16 {
+			cfg.PoolSize = 16
+		}
+		if cfg.PoolSize < 2 {
+			cfg.PoolSize = 2
+		}
 	}
 
 	return &Engine{
@@ -38,10 +47,15 @@ func New(cfg Config) *Engine {
 
 // Execute runs JavaScript code in a GOJA runtime.
 func (e *Engine) Execute(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {
+	// Check context before expensive operations
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+
 	start := time.Now()
 
 	// Get runtime from pool
-	runtime, release, err := e.pool.acquire()
+	runtime, release, err := e.pool.acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire runtime: %w", err)
 	}
@@ -59,12 +73,23 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 		}
 	}()
 
+	// Track injected globals for cleanup
+	injectedGlobals := make([]string, 0, len(globals))
+
 	// Inject globals
 	for name, value := range globals {
 		if err := runtime.Set(name, value); err != nil {
 			return nil, fmt.Errorf("failed to set global %s: %w", name, err)
 		}
+		injectedGlobals = append(injectedGlobals, name)
 	}
+
+	// Ensure cleanup of injected globals (defense in depth)
+	defer func() {
+		for _, name := range injectedGlobals {
+			_ = runtime.Set(name, goja.Undefined())
+		}
+	}()
 
 	// Wrap code to extract default export
 	wrappedCode := wrapCodeForExport(code)
@@ -189,65 +214,82 @@ func wrapCodeForExport(code string) string {
 type pool struct {
 	runtimes []*pooledRuntime
 	mu       sync.Mutex
-	closed   bool
+	cond     *sync.Cond
+	closed   atomic.Bool
 }
 
 type pooledRuntime struct {
 	runtime *goja.Runtime
-	busy    bool
-	mu      sync.Mutex
+	busy    atomic.Bool
 }
 
 func newPool(size int) *pool {
 	p := &pool{
 		runtimes: make([]*pooledRuntime, size),
 	}
+	p.cond = sync.NewCond(&p.mu)
 
 	for i := 0; i < size; i++ {
 		p.runtimes[i] = &pooledRuntime{
 			runtime: createRuntime(),
-			busy:    false,
 		}
 	}
 
 	return p
 }
 
-func (p *pool) acquire() (*goja.Runtime, func(), error) {
-	p.mu.Lock()
-	if p.closed {
-		p.mu.Unlock()
+func (p *pool) acquire(ctx context.Context) (*goja.Runtime, func(), error) {
+	if p.closed.Load() {
 		return nil, nil, fmt.Errorf("pool is closed")
 	}
 
-	// Find a free runtime
-	for _, r := range p.runtimes {
-		r.mu.Lock()
-		if !r.busy {
-			r.busy = true
-			r.mu.Unlock()
-			p.mu.Unlock()
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
-			return r.runtime, func() {
-				r.mu.Lock()
-				clearRuntime(r.runtime)
-				r.busy = false
-				r.mu.Unlock()
-			}, nil
+	// Try to find a free runtime with exponential backoff
+	for {
+		// Check context
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
 		}
-		r.mu.Unlock()
-	}
-	p.mu.Unlock()
 
-	// All runtimes busy, create a temporary one
-	runtime := createRuntime()
-	return runtime, func() {}, nil
+		// Check if pool was closed while waiting
+		if p.closed.Load() {
+			return nil, nil, fmt.Errorf("pool is closed")
+		}
+
+		// Try to find a free runtime
+		for _, r := range p.runtimes {
+			if r.busy.CompareAndSwap(false, true) {
+				return r.runtime, func() {
+					clearRuntime(r.runtime)
+					r.busy.Store(false)
+					// Signal waiting goroutines
+					p.cond.Signal()
+				}, nil
+			}
+		}
+
+		// All runtimes busy - wait with context-aware timeout
+		go func() {
+			select {
+			case <-ctx.Done():
+				p.cond.Broadcast()
+			case <-time.After(100 * time.Millisecond):
+				p.cond.Signal()
+			}
+		}()
+		p.cond.Wait()
+	}
 }
 
 func (p *pool) close() {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	p.closed = true
+	if !p.closed.CompareAndSwap(false, true) {
+		return // Already closed
+	}
+
+	// Wake up any waiting goroutines
+	p.cond.Broadcast()
 }
 
 // createRuntime creates a GOJA runtime with console support.

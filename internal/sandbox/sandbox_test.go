@@ -25,7 +25,11 @@ func TestValidateCode_Restricted(t *testing.T) {
 }
 
 func TestValidatePath_Allowed(t *testing.T) {
-	err := ValidatePath("/tmp/test.txt", []string{"/tmp"})
+	// Create a temporary directory to test with real paths
+	tmpDir := t.TempDir()
+	testFile := tmpDir + "/test.txt"
+
+	err := ValidatePath(testFile, []string{tmpDir})
 	if err != nil {
 		t.Errorf("unexpected error: %v", err)
 	}

@@ -5,38 +5,54 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"sync"
-	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
 )
 
 // Transpiler transpiles TypeScript to JavaScript with caching.
 type Transpiler struct {
-	cache *lruCache
-	mu    sync.RWMutex
+	cache     *lruCache
+	cacheSize int
 }
+
+// DefaultCacheSize is the default number of transpiled scripts to cache.
+const DefaultCacheSize = 1000
 
 // New creates a new TypeScript transpiler.
 func New() *Transpiler {
 	return &Transpiler{
-		cache: newLRUCache(1000),
+		cache:     newLRUCache(DefaultCacheSize),
+		cacheSize: DefaultCacheSize,
+	}
+}
+
+// NewWithCacheSize creates a new TypeScript transpiler with custom cache size.
+func NewWithCacheSize(size int) *Transpiler {
+	if size <= 0 {
+		size = DefaultCacheSize
+	}
+	return &Transpiler{
+		cache:     newLRUCache(size),
+		cacheSize: size,
 	}
 }
 
 // Transpile converts TypeScript code to JavaScript.
 // Returns the JavaScript code and source map.
+// This method is safe for concurrent use.
 func (t *Transpiler) Transpile(code string) (string, string, error) {
+	if len(code) == 0 {
+		return "", "", &TranspileError{Message: "code cannot be empty"}
+	}
+
 	// Compute hash
 	hash := hashCode(code)
 
-	// Check cache
-	t.mu.RLock()
+	// Check cache (thread-safe)
 	if cached, ok := t.cache.get(hash); ok {
-		t.mu.RUnlock()
 		result := cached.(*transpileResult)
 		return result.code, result.sourceMap, nil
 	}
-	t.mu.RUnlock()
 
 	// Transpile using esbuild
 	opts := api.TransformOptions{
@@ -56,30 +72,27 @@ func (t *Transpiler) Transpile(code string) (string, string, error) {
 		err := result.Errors[0]
 		return "", "", &TranspileError{
 			Message: err.Text,
-			Line:    0,
-			Column:  0,
+			Line:    err.Location.Line,
+			Column:  err.Location.Column,
 		}
 	}
 
 	jsCode := string(result.Code)
 	sourceMap := extractInlineSourceMap(jsCode)
 
-	// Cache result
-	t.mu.Lock()
+	// Cache result (thread-safe)
 	t.cache.put(hash, &transpileResult{
 		code:      jsCode,
 		sourceMap: sourceMap,
 	})
-	t.mu.Unlock()
 
 	return jsCode, sourceMap, nil
 }
 
 // ClearCache clears the transpilation cache.
+// This method is safe for concurrent use.
 func (t *Transpiler) ClearCache() {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-	t.cache = newLRUCache(1000)
+	t.cache = newLRUCache(t.cacheSize)
 }
 
 type transpileResult struct {
@@ -213,9 +226,4 @@ func (c *lruCache) removeLast() {
 	}
 	delete(c.items, c.tail.key)
 	c.remove(c.tail)
-}
-
-// DurationSince returns time since a start time.
-func DurationSince(start time.Time) time.Duration {
-	return time.Since(start)
 }
