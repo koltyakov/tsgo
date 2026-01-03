@@ -109,7 +109,7 @@ github.com/koltyakov/tsgo
 │   ├── sourcemap/       # Source map handling
 │   ├── typegen/         # Type definition generation
 │   └── monaco/          # Monaco editor integration
-└── cmd/examples/basic/  # Example application
+└── cmd/basic/           # Example application
 ```
 
 ## License

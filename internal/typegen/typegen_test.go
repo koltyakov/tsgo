@@ -45,11 +45,12 @@ func TestBuilder(t *testing.T) {
 	dts := builder.Build()
 
 	expected := []string{
-		"export interface User",
+		"interface User",
 		"id: number",
 		"name: string",
 		"const currentUser: User",
-		"declare function getUser",
+		"function getUser",
+		"declare global",
 	}
 
 	for _, exp := range expected {

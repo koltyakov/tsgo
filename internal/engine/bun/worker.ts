@@ -53,46 +53,96 @@ function applySecurityPolicy(policy: SecurityPolicy): void {
 
 // Execute user code and extract default export
 async function executeCode(code: string, context: Record<string, unknown>): Promise<unknown> {
-  // Build context injection as variable declarations
-  const contextEntries = Object.entries(context);
-  const contextDeclarations = contextEntries.length > 0
-    ? contextEntries.map(([key, value]) => 
-        `const ${key} = __context__["${key}"];`
-      ).join('\n')
-    : '';
+  // Check if code is already transpiled (IIFE format from esbuild with __tsgo_exports__)
+  const isTranspiled = code.includes('__tsgo_exports__');
+  
+  if (isTranspiled) {
+    // The code comes pre-transpiled from esbuild as an IIFE with GlobalName="__tsgo_exports__"
+    // Format: var __tsgo_exports__ = (() => { ... return exports; })();
+    
+    // Build context injection for the Function constructor
+    const contextKeys = Object.keys(context);
+    const contextDeclarations = contextKeys.length > 0
+      ? contextKeys.map(key => 
+          `var ${key} = __context__["${key}"];`
+        ).join('\n')
+      : '';
+    
+    const wrappedCode = `
+var __context__ = ${JSON.stringify(context)};
+${contextDeclarations}
+${code}
+return typeof __tsgo_exports__ !== 'undefined' ? __tsgo_exports__ : undefined;
+`;
+    
+    // Use Function constructor to execute the code
+    const fn = new Function(wrappedCode);
+    const exports = fn();
 
-  // Create a blob URL for dynamic import with scoped context
-  const wrappedCode = `
-const __context__ = ${JSON.stringify(context)};
+    // Handle the exports object
+    if (exports && typeof exports === 'object') {
+      // Check for default export
+      if ('default' in exports) {
+        const defaultExport = exports.default;
+        // If default export is a function, invoke it
+        if (typeof defaultExport === 'function') {
+          const result = defaultExport();
+          if (result instanceof Promise) {
+            return await result;
+          }
+          return result;
+        }
+        return defaultExport;
+      }
+      // Return the exports object if it has properties
+      if (Object.keys(exports).length > 0) {
+        return exports;
+      }
+    }
+    
+    return exports;
+  } else {
+    // Raw TypeScript/JavaScript code - use dynamic import via Blob URL
+    // Inject context via JSON serialization for full isolation
+    const contextKeys = Object.keys(context);
+    const contextDeclarations = contextKeys.length > 0
+      ? `const __context__ = ${JSON.stringify(context)};\n` +
+        contextKeys.map(key => 
+          `const ${key} = __context__["${key}"];`
+        ).join('\n')
+      : '';
+
+    const wrappedCode = `
 ${contextDeclarations}
 
 ${code}
 `;
 
-  const blob = new Blob([wrappedCode], { type: 'application/typescript' });
-  const url = URL.createObjectURL(blob);
+    const blob = new Blob([wrappedCode], { type: 'application/typescript' });
+    const url = URL.createObjectURL(blob);
 
-  try {
-    const module = await import(url);
-    
-    // Get the default export
-    const handler = module.default;
-    
-    // If default export is a function, invoke it
-    if (typeof handler === 'function') {
-      const result = handler();
+    try {
+      const module = await import(url);
       
-      // Handle async functions
-      if (result instanceof Promise) {
-        return await result;
+      // Get the default export
+      const handler = module.default;
+      
+      // If default export is a function, invoke it
+      if (typeof handler === 'function') {
+        const result = handler();
+        
+        // Handle async functions
+        if (result instanceof Promise) {
+          return await result;
+        }
+        return result;
       }
-      return result;
+      
+      // Return the value directly if not a function
+      return handler;
+    } finally {
+      URL.revokeObjectURL(url);
     }
-    
-    // Return the value directly if not a function
-    return handler;
-  } finally {
-    URL.revokeObjectURL(url);
   }
 }
 

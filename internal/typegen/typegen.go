@@ -85,7 +85,7 @@ func NewBuilder() *Builder {
 // AddInterface adds an interface definition.
 func (b *Builder) AddInterface(name string, fields map[string]string) *Builder {
 	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("export interface %s {\n", name))
+	sb.WriteString(fmt.Sprintf("interface %s {\n", name))
 
 	// Sort for consistent output
 	keys := make([]string, 0, len(fields))
@@ -99,7 +99,7 @@ func (b *Builder) AddInterface(name string, fields map[string]string) *Builder {
 		sb.WriteString(fmt.Sprintf("  %s: %s;\n", field, tsType))
 	}
 
-	sb.WriteString("}\n")
+	sb.WriteString("}")
 	b.interfaces = append(b.interfaces, sb.String())
 	return b
 }
@@ -116,7 +116,7 @@ func (b *Builder) AddFunction(name, params, returnType, doc string) *Builder {
 	if doc != "" {
 		sb.WriteString(fmt.Sprintf("/** %s */\n", doc))
 	}
-	sb.WriteString(fmt.Sprintf("declare function %s(%s): %s;", name, params, returnType))
+	sb.WriteString(fmt.Sprintf("function %s(%s): %s;", name, params, returnType))
 	b.functions = append(b.functions, sb.String())
 	return b
 }
@@ -125,30 +125,38 @@ func (b *Builder) AddFunction(name, params, returnType, doc string) *Builder {
 func (b *Builder) Build() string {
 	var sb strings.Builder
 
+	sb.WriteString("declare global {\n")
+
 	// Interfaces first
 	for _, iface := range b.interfaces {
-		sb.WriteString(iface)
+		// Indent each line
+		lines := strings.Split(iface, "\n")
+		for _, line := range lines {
+			sb.WriteString("  ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
 		sb.WriteString("\n")
 	}
 
 	// Global declarations
-	if len(b.globals) > 0 {
-		sb.WriteString("declare global {\n")
-		for _, global := range b.globals {
-			sb.WriteString("  ")
-			sb.WriteString(global)
-			sb.WriteString(";\n")
-		}
-		sb.WriteString("}\n\n")
+	for _, global := range b.globals {
+		sb.WriteString("  ")
+		sb.WriteString(global)
+		sb.WriteString(";\n")
 	}
 
 	// Functions
 	for _, fn := range b.functions {
-		sb.WriteString(fn)
-		sb.WriteString("\n")
+		lines := strings.Split(fn, "\n")
+		for _, line := range lines {
+			sb.WriteString("  ")
+			sb.WriteString(line)
+			sb.WriteString("\n")
+		}
 	}
 
-	sb.WriteString("export {}\n")
+	sb.WriteString("}\n\nexport {}\n")
 
 	return sb.String()
 }

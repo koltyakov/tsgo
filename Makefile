@@ -48,6 +48,11 @@ lint:
 tidy:
 	go mod tidy
 
+# Run Monaco editor example
+monaco:
+	@echo "Starting Monaco editor at http://localhost:8080"
+	go run ./cmd/monaco
+
 # Clean build artifacts
 clean:
 	rm -f coverage.out coverage.html
@@ -64,6 +69,7 @@ help:
 	@echo "  bench-all  - Run benchmarks with multiple iterations"
 	@echo "  bench-goja - Run GOJA benchmarks only"
 	@echo "  bench-bun  - Run Bun benchmarks only"
+	@echo "  monaco     - Run Monaco editor example"
 	@echo "  fmt        - Format code"
 	@echo "  lint       - Run linter"
 	@echo "  tidy       - Tidy dependencies"

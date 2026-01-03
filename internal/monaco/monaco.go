@@ -104,7 +104,7 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (h *Handler) handleTypes(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleTypes(w http.ResponseWriter, _ *http.Request) {
 	h.mu.RLock()
 	dts := h.types.Build()
 	h.mu.RUnlock()
@@ -113,7 +113,7 @@ func (h *Handler) handleTypes(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"types": dts})
 }
 
-func (h *Handler) handleClientScript(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) handleClientScript(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript")
 	w.Write([]byte(ClientScript()))
 }
