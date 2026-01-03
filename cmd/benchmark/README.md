@@ -18,6 +18,7 @@ go run ./cmd/benchmark -runs=100 -output=results.md
 # Output specific sections
 go run ./cmd/benchmark -section=comparison   # Performance table only
 go run ./cmd/benchmark -section=concurrency  # Concurrency scaling only
+go run ./cmd/benchmark -section=memory       # Memory usage only
 go run ./cmd/benchmark -section=detailed     # Full statistics only
 
 # Using make targets
@@ -32,15 +33,16 @@ make benchmark-stats-md   # Save to internal/benchmark/Results.md
 | `-runs`    | 15      | Number of benchmark runs per test case                   |
 | `-warmup`  | 3       | Number of warmup runs before measurement                 |
 | `-output`  | stdout  | Output file for markdown results                         |
-| `-section` | all     | Output section: `comparison`, `concurrency`, `detailed`, `all` |
+| `-section` | all     | Output section: `comparison`, `concurrency`, `memory`, `detailed`, `all` |
 
 ## Output Sections
 
-The tool generates three sections of markdown tables:
+The tool generates four sections of markdown tables:
 
 1. **Performance Comparison** - Mean execution time per test with winner and speedup ratio
 2. **Concurrency Scaling** - How engines scale from 1 to 32 concurrent executions
-3. **Detailed Statistics** - Mean, StdDev, Min, P50 (median), P95 per test
+3. **Memory Usage** - Go-side memory allocations per execution
+4. **Detailed Statistics** - Mean, StdDev, Min, P50 (median), P95 per test
 
 ## Key Insights
 

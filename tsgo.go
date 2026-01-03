@@ -27,6 +27,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/koltyakov/tsgo/internal/contract"
 	"github.com/koltyakov/tsgo/internal/engine"
 	"github.com/koltyakov/tsgo/internal/engine/bun"
 	"github.com/koltyakov/tsgo/internal/engine/goja"
@@ -363,4 +364,48 @@ func ServeMonaco(cfg MonacoConfig) error {
 // MonacoClientScript returns JavaScript for Monaco integration.
 func MonacoClientScript() string {
 	return monaco.ClientScript()
+}
+
+// --- Contract Generation ---
+
+// Contract represents the extracted contract from a TypeScript script.
+// It includes the output type definition and expected inputs.
+type Contract = contract.Contract
+
+// TypeDef represents a TypeScript type definition.
+type TypeDef = contract.TypeDef
+
+// ContractProperty represents a property in a contract type.
+type ContractProperty = contract.Property
+
+// JSONSchema represents a JSON Schema definition.
+type JSONSchema = contract.JSONSchema
+
+// ContractAnalyzer extracts contract definitions from TypeScript code.
+type ContractAnalyzer = contract.Analyzer
+
+// NewContractAnalyzer creates a new contract analyzer.
+func NewContractAnalyzer() *ContractAnalyzer {
+	return contract.NewAnalyzer()
+}
+
+// AnalyzeContract extracts the contract definition from TypeScript code.
+// It parses interfaces, type aliases, and the default export to determine
+// the shape of the script's output.
+//
+// Example:
+//
+//	contract, err := tsgo.AnalyzeContract(`
+//	    interface User {
+//	        id: number;
+//	        name: string;
+//	    }
+//	    const user: User = { id: 1, name: "Alice" };
+//	    export default user;
+//	`)
+//	// contract.Type describes the User interface
+//	// contract.ToTypeScript() returns TypeScript type definition
+//	// contract.ToJSONSchema() returns JSON Schema
+func AnalyzeContract(code string) (*Contract, error) {
+	return contract.NewAnalyzer().Analyze(code)
 }

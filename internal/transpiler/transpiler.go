@@ -46,6 +46,9 @@ func (t *Transpiler) Transpile(code string) (string, string, error) {
 		return "", "", &TranspileError{Message: "code cannot be empty"}
 	}
 
+	// Preprocess: if no export default, wrap trailing expression
+	code = preprocessTrailingExpression(code)
+
 	// Compute hash
 	hash := hashCode(code)
 
@@ -134,6 +137,195 @@ func extractInlineSourceMap(code string) string {
 		result = result[:newlineIdx]
 	}
 	return strings.TrimSpace(result)
+}
+
+// preprocessTrailingExpression converts trailing expressions to export default.
+// This ensures expressions like "1 === 2" or "a && b" return their value.
+func preprocessTrailingExpression(code string) string {
+	// Fast path: if already has export default, return as-is
+	if strings.Contains(code, "export default") || strings.Contains(code, "export {") {
+		return code
+	}
+
+	// Remove comments for analysis
+	clean := removeComments(code)
+
+	// Split into statements
+	statements := splitStatements(clean)
+	if len(statements) == 0 {
+		return code
+	}
+
+	// Find the last non-empty, non-declaration statement
+	lastIdx := -1
+	for i := len(statements) - 1; i >= 0; i-- {
+		stmt := strings.TrimSpace(statements[i])
+		if stmt == "" {
+			continue
+		}
+
+		// Skip declarations - they can't be exported as expressions
+		if isDeclaration(stmt) {
+			continue
+		}
+
+		// This looks like an expression
+		lastIdx = i
+		break
+	}
+
+	// No trailing expression found
+	if lastIdx == -1 {
+		return code
+	}
+
+	// Find the position of this statement in the original code
+	// and wrap it with export default
+	lastStmt := strings.TrimSpace(statements[lastIdx])
+
+	// Handle trailing semicolon
+	lastStmt = strings.TrimSuffix(lastStmt, ";")
+
+	// Find and replace the last occurrence in original code
+	// We need to be careful to find the exact statement
+	idx := strings.LastIndex(code, lastStmt)
+	if idx == -1 {
+		return code
+	}
+
+	// Check what comes after to preserve semicolons/newlines
+	afterIdx := idx + len(lastStmt)
+	suffix := ""
+	if afterIdx < len(code) {
+		remaining := code[afterIdx:]
+		// Take any trailing semicolon and whitespace
+		for i, c := range remaining {
+			if c == ';' || c == ' ' || c == '\t' || c == '\n' || c == '\r' {
+				suffix = remaining[:i+1]
+			} else {
+				break
+			}
+		}
+		if suffix == "" && len(remaining) > 0 && (remaining[0] == ';' || remaining[0] == '\n') {
+			suffix = string(remaining[0])
+		}
+	}
+
+	// Build the new code with export default
+	return code[:idx] + "export default (" + lastStmt + ")" + suffix + code[afterIdx+len(suffix):]
+}
+
+// removeComments removes single-line and multi-line comments from code.
+func removeComments(code string) string {
+	var result strings.Builder
+	i := 0
+	for i < len(code) {
+		if i+1 < len(code) {
+			if code[i] == '/' && code[i+1] == '/' {
+				// Single-line comment
+				for i < len(code) && code[i] != '\n' {
+					i++
+				}
+				continue
+			}
+			if code[i] == '/' && code[i+1] == '*' {
+				// Multi-line comment
+				i += 2
+				for i+1 < len(code) && !(code[i] == '*' && code[i+1] == '/') {
+					i++
+				}
+				i += 2
+				continue
+			}
+		}
+		if i < len(code) {
+			result.WriteByte(code[i])
+		}
+		i++
+	}
+	return result.String()
+}
+
+// splitStatements splits code into statements by semicolons and newlines.
+func splitStatements(code string) []string {
+	var statements []string
+	var current strings.Builder
+	braceDepth := 0
+	parenDepth := 0
+	bracketDepth := 0
+	inString := false
+	stringChar := byte(0)
+
+	for i := 0; i < len(code); i++ {
+		c := code[i]
+
+		// Handle strings
+		if !inString && (c == '"' || c == '\'' || c == '`') {
+			inString = true
+			stringChar = c
+			current.WriteByte(c)
+			continue
+		}
+		if inString {
+			current.WriteByte(c)
+			if c == stringChar && (i == 0 || code[i-1] != '\\') {
+				inString = false
+			}
+			continue
+		}
+
+		// Track braces/parens/brackets
+		switch c {
+		case '{':
+			braceDepth++
+		case '}':
+			braceDepth--
+		case '(':
+			parenDepth++
+		case ')':
+			parenDepth--
+		case '[':
+			bracketDepth++
+		case ']':
+			bracketDepth--
+		}
+
+		// Statement separator only at top level
+		if (c == ';' || c == '\n') && braceDepth == 0 && parenDepth == 0 && bracketDepth == 0 {
+			stmt := strings.TrimSpace(current.String())
+			if stmt != "" {
+				statements = append(statements, stmt)
+			}
+			current.Reset()
+			continue
+		}
+
+		current.WriteByte(c)
+	}
+
+	// Don't forget the last statement
+	if stmt := strings.TrimSpace(current.String()); stmt != "" {
+		statements = append(statements, stmt)
+	}
+
+	return statements
+}
+
+// isDeclaration checks if a statement is a declaration (not an expression).
+func isDeclaration(stmt string) bool {
+	declarationPrefixes := []string{
+		"const ", "let ", "var ",
+		"interface ", "type ", "class ",
+		"function ", "async function ",
+		"declare ", "import ", "export ",
+		"enum ", "namespace ", "module ",
+	}
+	for _, prefix := range declarationPrefixes {
+		if strings.HasPrefix(stmt, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // lruCache is a simple LRU cache implementation.

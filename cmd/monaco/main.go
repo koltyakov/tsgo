@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/koltyakov/tsgo"
+	"github.com/koltyakov/tsgo/internal/contract"
 	"github.com/koltyakov/tsgo/internal/monaco"
 	"github.com/koltyakov/tsgo/internal/typegen"
 )
@@ -93,6 +94,22 @@ func main() {
 
 	handler.SetTypes(builder)
 
+	// Create contract analyzer with the same type definitions
+	contractAnalyzer := contract.NewAnalyzer()
+	contractAnalyzer.AddInterface("User", map[string]string{
+		"id":    "number",
+		"name":  "string",
+		"email": "string",
+		"role":  "'admin' | 'user' | 'guest'",
+	})
+	contractAnalyzer.AddInterface("Config", map[string]string{
+		"apiUrl":  "string",
+		"timeout": "number",
+		"debug":   "boolean",
+	})
+	contractAnalyzer.AddGlobalFromTypeString("currentUser", "User")
+	contractAnalyzer.AddGlobalFromTypeString("config", "Config")
+
 	// Serve static files
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/" {
@@ -139,6 +156,47 @@ func main() {
 			"type":     fmt.Sprintf("%T", result.Value),
 			"duration": result.Metrics.ExecutionTime.String(),
 			"engine":   result.EngineUsed.String(),
+		})
+	})
+
+	// Contract generation endpoint
+	http.HandleFunc("/contract", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		var req struct {
+			Code string `json:"code"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+
+		c, err := contractAnalyzer.Analyze(req.Code)
+
+		w.Header().Set("Content-Type", "application/json")
+		if err != nil {
+			json.NewEncoder(w).Encode(map[string]any{
+				"error": err.Error(),
+			})
+			return
+		}
+
+		// Generate TypeScript definition
+		tsDef := c.ToTypeScript()
+
+		// Generate JSON Schema
+		jsonSchema, _ := c.ToJSONSchemaJSON()
+
+		// Get contract as JSON
+		contractJSON, _ := c.ToJSON()
+
+		json.NewEncoder(w).Encode(map[string]any{
+			"typescript": tsDef,
+			"jsonSchema": string(jsonSchema),
+			"contract":   string(contractJSON),
 		})
 	})
 

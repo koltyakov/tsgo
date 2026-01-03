@@ -212,3 +212,45 @@ func TestPoolClosed(t *testing.T) {
 		t.Error("expected error from closed pool")
 	}
 }
+
+func TestExecute_ComparisonExpression(t *testing.T) {
+	engine := New(Config{PoolSize: 2})
+	defer engine.Close()
+
+	// Note: These tests test the raw GOJA engine without transpilation.
+	// Multi-statement code with trailing expressions requires preprocessing
+	// by the transpiler, so we only test simple expressions here.
+	tests := []struct {
+		name     string
+		code     string
+		expected bool
+	}{
+		{"strict equality false", "1 === 2", false},
+		{"strict equality true", "2 === 2", true},
+		{"strict inequality", "1 !== 2", true},
+		{"less than", "1 < 2", true},
+		{"greater than", "1 > 2", false},
+		{"logical and", "true && false", false},
+		{"logical or", "true || false", true},
+	}
+
+	ctx := context.Background()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := engine.Execute(ctx, tt.code, nil)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, ok := result.Value.(bool)
+			if !ok {
+				t.Fatalf("expected boolean result, got %T: %v", result.Value, result.Value)
+			}
+
+			if got != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, got)
+			}
+		})
+	}
+}

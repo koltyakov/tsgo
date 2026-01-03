@@ -143,6 +143,63 @@ func TestGenerateContextTypes(t *testing.T) {
 	}
 }
 
+func TestAnalyzeContract(t *testing.T) {
+	code := `
+		interface User {
+			id: number;
+			name: string;
+		}
+		const user: User = { id: 1, name: "Alice" };
+		export default user;
+	`
+
+	contract, err := AnalyzeContract(code)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contract == nil {
+		t.Fatal("expected contract")
+	}
+
+	if contract.Type == nil {
+		t.Fatal("expected type in contract")
+	}
+
+	if contract.Type.Name != "User" {
+		t.Errorf("expected User type, got %s", contract.Type.Name)
+	}
+
+	// Test TypeScript generation
+	ts := contract.ToTypeScript()
+	if !strings.Contains(ts, "export type Result") {
+		t.Error("expected TypeScript output")
+	}
+
+	// Test JSON Schema generation
+	schema := contract.ToJSONSchema()
+	if schema.Schema == "" {
+		t.Error("expected JSON Schema")
+	}
+}
+
+func TestNewContractAnalyzer(t *testing.T) {
+	analyzer := NewContractAnalyzer()
+	if analyzer == nil {
+		t.Fatal("expected analyzer")
+	}
+
+	code := `export default { value: 42 };`
+	contract, err := analyzer.Analyze(code)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contract.Type.Kind != "object" {
+		t.Errorf("expected object kind, got %s", contract.Type.Kind)
+	}
+}
+
 func TestDefaultMonacoConfig(t *testing.T) {
 	cfg := DefaultMonacoConfig()
 	if cfg.Host != "localhost" {
@@ -161,5 +218,46 @@ func TestMonacoClientScript(t *testing.T) {
 	script := MonacoClientScript()
 	if !strings.Contains(script, "tsgoMonaco") {
 		t.Error("expected tsgoMonaco in script")
+	}
+}
+
+func TestExecute_ComparisonExpression(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+	defer executor.Close()
+
+	tests := []struct {
+		name     string
+		code     string
+		expected bool
+	}{
+		{"strict equality false", "1 === 2", false},
+		{"strict equality true", "2 === 2", true},
+		{"strict inequality", "1 !== 2", true},
+		{"less than", "1 < 2", true},
+		{"greater than", "1 > 2", false},
+		{"with variables", "let a = '1';\nlet b = '2';\na === b", false},
+		{"logical and", "true && false", false},
+		{"logical or", "true || false", true},
+		{"complex comparison", "const x = 5;\nx > 3 && x < 10", true},
+	}
+
+	ctx := context.Background()
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := executor.Execute(ctx, tt.code)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			got, ok := result.Value.(bool)
+			if !ok {
+				t.Fatalf("expected boolean result, got %T: %v", result.Value, result.Value)
+			}
+
+			if got != tt.expected {
+				t.Errorf("expected %v, got %v", tt.expected, got)
+			}
+		})
 	}
 }

@@ -185,3 +185,89 @@ func TestLRUCache(t *testing.T) {
 		t.Error("expected c=3 to be present")
 	}
 }
+
+func TestPreprocessTrailingExpression(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		contains string // what the result should contain
+	}{
+		{
+			name:     "simple comparison",
+			input:    "1 === 2",
+			contains: "export default (1 === 2)",
+		},
+		{
+			name:     "comparison with variables",
+			input:    "let a = '1';\nlet b = '2';\na === b",
+			contains: "export default (a === b)",
+		},
+		{
+			name:     "logical expression",
+			input:    "true && false",
+			contains: "export default (true && false)",
+		},
+		{
+			name:     "already has export default",
+			input:    "export default 42;",
+			contains: "export default 42",
+		},
+		{
+			name:     "trailing number",
+			input:    "const x = 1;\n42",
+			contains: "export default (42)",
+		},
+		{
+			name:     "arithmetic expression",
+			input:    "const x = 10;\nx * 2 + 5",
+			contains: "export default (x * 2 + 5)",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := preprocessTrailingExpression(tt.input)
+			if !strings.Contains(result, tt.contains) {
+				t.Errorf("expected result to contain %q, got %q", tt.contains, result)
+			}
+		})
+	}
+}
+
+func TestIsDeclaration(t *testing.T) {
+	declarations := []string{
+		"const x = 1",
+		"let y = 2",
+		"var z = 3",
+		"function foo() {}",
+		"async function bar() {}",
+		"interface User {}",
+		"type Status = string",
+		"class Person {}",
+		"import { x } from 'y'",
+		"export const a = 1",
+		"declare const b: number",
+	}
+
+	for _, stmt := range declarations {
+		if !isDeclaration(stmt) {
+			t.Errorf("expected %q to be a declaration", stmt)
+		}
+	}
+
+	expressions := []string{
+		"1 === 2",
+		"a && b",
+		"foo()",
+		"x + y",
+		"obj.method()",
+		"true",
+		"42",
+	}
+
+	for _, stmt := range expressions {
+		if isDeclaration(stmt) {
+			t.Errorf("expected %q to NOT be a declaration", stmt)
+		}
+	}
+}

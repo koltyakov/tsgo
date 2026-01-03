@@ -120,6 +120,24 @@
       position: relative;
     }
 
+    .aside-top {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-height: 100px;
+      overflow: hidden;
+    }
+
+    .aside-bottom {
+      height: 250px;
+      min-height: 100px;
+      max-height: 500px;
+      display: flex;
+      flex-direction: column;
+      border-top: 1px solid #3c3c3c;
+      position: relative;
+    }
+
     .resize-handle-h {
       position: absolute;
       left: 0;
@@ -171,6 +189,59 @@
       overflow: auto;
       white-space: pre-wrap;
       color: #9cdcfe;
+    }
+
+    .contract-tabs {
+      display: flex;
+      background: #2d2d2d;
+      border-bottom: 1px solid #3c3c3c;
+    }
+
+    .contract-tab {
+      padding: 8px 12px;
+      font-size: 11px;
+      color: #888;
+      cursor: pointer;
+      border: none;
+      background: transparent;
+      border-bottom: 2px solid transparent;
+      transition: all 0.15s;
+    }
+
+    .contract-tab:hover {
+      color: #ccc;
+    }
+
+    .contract-tab.active {
+      color: #fff;
+      border-bottom-color: #007acc;
+    }
+
+    #contract-content {
+      flex: 1;
+      padding: 12px;
+      font-family: 'Menlo', 'Monaco', 'Courier New', monospace;
+      font-size: 10px;
+      line-height: 1.4;
+      overflow: auto;
+      white-space: pre-wrap;
+      color: #9cdcfe;
+    }
+
+    #contract-content.typescript {
+      color: #9cdcfe;
+    }
+
+    #contract-content.json {
+      color: #ce9178;
+    }
+
+    .contract-status {
+      padding: 4px 12px;
+      font-size: 10px;
+      color: #666;
+      background: #1e1e1e;
+      border-top: 1px solid #3c3c3c;
     }
 
     .output-panel {
@@ -261,8 +332,19 @@
       <div id="editor-container"></div>
       <aside id="types-panel">
         <div class="resize-handle-h" id="types-resize"></div>
-        <div class="panel-header">Type Definitions</div>
-        <div id="types-preview">Loading types...</div>
+        <div class="aside-top">
+          <div class="panel-header">Type Definitions</div>
+          <div id="types-preview">Loading types...</div>
+        </div>
+        <div class="aside-bottom" id="contract-panel">
+          <div class="resize-handle-v" id="contract-resize"></div>
+          <div class="contract-tabs">
+            <button class="contract-tab active" data-tab="typescript">TypeScript</button>
+            <button class="contract-tab" data-tab="jsonschema">JSON Schema</button>
+          </div>
+          <div id="contract-content" class="typescript">// Edit code to generate contract...</div>
+          <div class="contract-status" id="contract-status">Ready</div>
+        </div>
       </aside>
     </div>
     <div class="output-panel" id="output-panel">
@@ -512,6 +594,120 @@ export default {
           document.body.style.userSelect = '';
         }
       });
+
+      // Vertical resize for contract panel
+      const contractPanel = document.getElementById('contract-panel');
+      const contractResize = document.getElementById('contract-resize');
+      let isResizingContract = false;
+
+      contractResize.addEventListener('mousedown', (e) => {
+        isResizingContract = true;
+        contractResize.classList.add('dragging');
+        document.body.style.cursor = 'ns-resize';
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+      });
+
+      document.addEventListener('mousemove', (e) => {
+        if (isResizingContract) {
+          const panelRect = typesPanel.getBoundingClientRect();
+          const newHeight = panelRect.bottom - e.clientY;
+          if (newHeight >= 100 && newHeight <= 500) {
+            contractPanel.style.height = newHeight + 'px';
+          }
+        }
+      });
+
+      document.addEventListener('mouseup', () => {
+        if (isResizingContract) {
+          isResizingContract = false;
+          contractResize.classList.remove('dragging');
+          document.body.style.cursor = '';
+          document.body.style.userSelect = '';
+        }
+      });
+    })();
+
+    // Contract generation with debounce
+    (function() {
+      const contractContent = document.getElementById('contract-content');
+      const contractStatus = document.getElementById('contract-status');
+      const tabs = document.querySelectorAll('.contract-tab');
+      
+      let currentContract = { typescript: '', jsonSchema: '' };
+      let currentTab = 'typescript';
+      let debounceTimer = null;
+
+      // Tab switching
+      tabs.forEach(tab => {
+        tab.addEventListener('click', () => {
+          tabs.forEach(t => t.classList.remove('active'));
+          tab.classList.add('active');
+          currentTab = tab.dataset.tab;
+          updateContractDisplay();
+        });
+      });
+
+      function updateContractDisplay() {
+        if (currentTab === 'typescript') {
+          contractContent.className = 'typescript';
+          contractContent.textContent = currentContract.typescript || '// No contract generated';
+        } else {
+          contractContent.className = 'json';
+          contractContent.textContent = currentContract.jsonSchema || '// No schema generated';
+        }
+      }
+
+      async function generateContract() {
+        if (!editor) return;
+        
+        const code = editor.getValue();
+        contractStatus.textContent = 'Generating...';
+        
+        try {
+          const response = await fetch('/contract', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ code })
+          });
+          
+          const result = await response.json();
+          
+          if (result.error) {
+            contractStatus.textContent = 'Error: ' + result.error;
+            currentContract = { typescript: '// Error generating contract', jsonSchema: '// Error generating schema' };
+          } else {
+            currentContract = {
+              typescript: result.typescript || '// No types exported',
+              jsonSchema: result.jsonSchema || '{}'
+            };
+            const count = result.contract?.types?.length || 0;
+            contractStatus.textContent = `Generated ${count} type${count !== 1 ? 's' : ''}`;
+          }
+          
+          updateContractDisplay();
+        } catch (err) {
+          contractStatus.textContent = 'Network error';
+          currentContract = { typescript: '// Network error', jsonSchema: '// Network error' };
+          updateContractDisplay();
+        }
+      }
+
+      function debouncedGenerate() {
+        clearTimeout(debounceTimer);
+        contractStatus.textContent = 'Waiting...';
+        debounceTimer = setTimeout(generateContract, 400);
+      }
+
+      // Hook into Monaco editor when ready
+      const checkEditor = setInterval(() => {
+        if (editor) {
+          clearInterval(checkEditor);
+          editor.onDidChangeModelContent(debouncedGenerate);
+          // Generate initial contract
+          generateContract();
+        }
+      }, 100);
     })();
   </script>
 </body>
