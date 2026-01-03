@@ -56,8 +56,39 @@ func main() {
 
 | Engine | Pure Go | TypeScript | Async | Network |
 |--------|---------|------------|-------|---------|
-| GOJA   | ✅      | via esbuild| ✅    | ❌      |
+| GOJA   | ✅      | via esbuild| ❌    | ❌      |
 | Bun    | ❌      | Native     | ✅    | ✅      |
+
+### Engine Selection Guide
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                    Need async/await?                        │
+└─────────────────────────────────────────────────────────────┘
+                          │
+              ┌───────────┴───────────┐
+              │                       │
+             Yes                      No
+              │                       │
+              ▼                       ▼
+        ┌─────────┐         ┌─────────────────────┐
+        │   Bun   │         │ CPU-intensive work? │
+        └─────────┘         └─────────────────────┘
+                                      │
+                          ┌───────────┴───────────┐
+                          │                       │
+                         Yes                      No
+                          │                       │
+                          ▼                       ▼
+                    ┌─────────┐             ┌─────────┐
+                    │   Bun   │             │  GOJA   │
+                    └─────────┘             └─────────┘
+```
+
+**GOJA** - Best for simple expressions, high concurrency, pure Go deployments  
+**Bun** - Best for CPU-intensive work, async/await, complex TypeScript
+
+See the [Benchmark Suite](internal/benchmark/README.md) for detailed comparison, cold start analysis, and performance data.
 
 ## Configuration Options
 
