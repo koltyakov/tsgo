@@ -26,14 +26,26 @@ var embeddedWorker []byte
 
 // Config configures the Bun execution engine.
 type Config struct {
-	// PoolSize sets the number of pre-warmed Bun processes.
+	// PoolSize sets the maximum number of Bun processes.
 	PoolSize int
+	// MinPoolSize sets the minimum number of pre-warmed processes (lazy mode).
+	// If 0, all PoolSize processes are started immediately (eager mode).
+	MinPoolSize int
 	// ExecutablePath overrides the path to the Bun executable.
 	ExecutablePath string
 	// WorkerScript provides a custom worker script (empty = use embedded).
 	WorkerScript string
 	// HealthCheckInterval sets the interval for process health checks.
 	HealthCheckInterval time.Duration
+	// MaxRequestsPerProcess sets how many requests a process handles before recycling.
+	// If 0, processes are never recycled (default for short-lived usage).
+	MaxRequestsPerProcess int64
+	// MaxProcessAge sets the maximum age before a process is recycled.
+	// If 0, processes are never recycled by age.
+	MaxProcessAge time.Duration
+	// QueueSize sets the maximum number of queued requests when all processes are busy.
+	// If 0, requests block until a process is available.
+	QueueSize int
 }
 
 // Engine executes TypeScript using external Bun processes.
@@ -96,8 +108,14 @@ func New(cfg Config) (*Engine, error) {
 		available:  true,
 	}
 
-	// Create process pool
-	engine.pool = newPool(cfg.PoolSize, bunPath, workerPath)
+	// Create process pool with service mode settings
+	engine.pool = newPool(poolConfig{
+		size:               cfg.PoolSize,
+		minSize:            cfg.MinPoolSize,
+		maxRequestsPerProc: cfg.MaxRequestsPerProcess,
+		maxProcessAge:      cfg.MaxProcessAge,
+		queueSize:          cfg.QueueSize,
+	}, bunPath, workerPath)
 
 	// Start health checker
 	go engine.pool.healthChecker(cfg.HealthCheckInterval)
@@ -231,19 +249,30 @@ type pool struct {
 	closed     atomic.Bool
 	stopCh     chan struct{}
 	nextIdx    uint64 // for round-robin selection
+
+	// Service mode settings
+	minSize            int           // minimum processes to keep warm
+	maxRequestsPerProc int64         // recycle after N requests (0 = never)
+	maxProcessAge      time.Duration // recycle after age (0 = never)
+
+	// Request queue for backpressure
+	queueSem    chan struct{} // nil = no queuing, blocks on acquire
+	activeCount int32         // number of active processes
 }
 
 type process struct {
-	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	stdinMu   sync.Mutex // protects stdin writes
-	stdout    *bufio.Reader
-	pending   map[string]chan *response
-	mu        sync.Mutex
-	ready     bool
-	lastUsed  time.Time
-	failures  int32
-	requestID int64
+	cmd          *exec.Cmd
+	stdin        io.WriteCloser
+	stdinMu      sync.Mutex // protects stdin writes
+	stdout       *bufio.Reader
+	pending      map[string]chan *response
+	mu           sync.Mutex
+	ready        bool
+	lastUsed     time.Time
+	failures     int32
+	requestID    int64
+	requestCount int64     // total requests handled (for recycling)
+	startTime    time.Time // when process was started (for age-based recycling)
 }
 
 type request struct {
@@ -265,22 +294,45 @@ type response struct {
 	} `json:"metrics,omitempty"`
 }
 
-func newPool(size int, bunPath, workerPath string) *pool {
+// poolConfig holds service mode settings for the pool
+type poolConfig struct {
+	size               int
+	minSize            int
+	maxRequestsPerProc int64
+	maxProcessAge      time.Duration
+	queueSize          int
+}
+
+func newPool(cfg poolConfig, bunPath, workerPath string) *pool {
 	p := &pool{
-		processes:  make([]*process, size),
-		bunPath:    bunPath,
-		workerPath: workerPath,
-		stopCh:     make(chan struct{}),
+		processes:          make([]*process, cfg.size),
+		bunPath:            bunPath,
+		workerPath:         workerPath,
+		stopCh:             make(chan struct{}),
+		minSize:            cfg.minSize,
+		maxRequestsPerProc: cfg.maxRequestsPerProc,
+		maxProcessAge:      cfg.maxProcessAge,
 	}
 
-	// Start initial processes
-	for i := 0; i < size; i++ {
+	// Set up request queue if configured
+	if cfg.queueSize > 0 {
+		p.queueSem = make(chan struct{}, cfg.queueSize)
+	}
+
+	// Start initial processes (lazy mode starts minSize, eager starts all)
+	initialSize := cfg.size
+	if cfg.minSize > 0 && cfg.minSize < cfg.size {
+		initialSize = cfg.minSize
+	}
+
+	for i := 0; i < initialSize; i++ {
 		proc, err := p.startProcess()
 		if err != nil {
 			// Log error but continue - we can start processes on demand
 			continue
 		}
 		p.processes[i] = proc
+		atomic.AddInt32(&p.activeCount, 1)
 	}
 
 	return p
@@ -310,11 +362,12 @@ func (p *pool) startProcess() (*process, error) {
 	}
 
 	proc := &process{
-		cmd:      cmd,
-		stdin:    stdin,
-		stdout:   bufio.NewReader(stdout),
-		pending:  make(map[string]chan *response),
-		lastUsed: time.Now(),
+		cmd:       cmd,
+		stdin:     stdin,
+		stdout:    bufio.NewReader(stdout),
+		pending:   make(map[string]chan *response),
+		lastUsed:  time.Now(),
+		startTime: time.Now(),
 	}
 
 	// Start response reader
@@ -347,6 +400,16 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 		return nil, nil, errors.New("pool is closed")
 	}
 
+	// If queue is configured, try to acquire a slot (backpressure)
+	if p.queueSem != nil {
+		select {
+		case p.queueSem <- struct{}{}:
+			// Got a slot
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		}
+	}
+
 	p.mu.RLock()
 
 	// Round-robin selection - each process can handle multiple concurrent requests
@@ -369,6 +432,7 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 			// Double-check after acquiring write lock
 			if p.processes[idx] == proc && atomic.LoadInt32(&proc.failures) >= 3 {
 				p.processes[idx] = nil
+				atomic.AddInt32(&p.activeCount, -1)
 				go func(oldProc *process, pidx int) {
 					oldProc.close()
 					newProc, err := p.startProcess()
@@ -376,6 +440,34 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 						p.mu.Lock()
 						if !p.closed.Load() && p.processes[pidx] == nil {
 							p.processes[pidx] = newProc
+							atomic.AddInt32(&p.activeCount, 1)
+						} else {
+							newProc.close()
+						}
+						p.mu.Unlock()
+					}
+				}(proc, idx)
+			}
+			p.mu.Unlock()
+			p.mu.RLock()
+			continue
+		}
+
+		// Check if process needs recycling (request count or age)
+		if p.needsRecycle(proc) {
+			p.mu.RUnlock()
+			p.mu.Lock()
+			if p.processes[idx] == proc && p.needsRecycle(proc) {
+				p.processes[idx] = nil
+				atomic.AddInt32(&p.activeCount, -1)
+				go func(oldProc *process, pidx int) {
+					oldProc.close()
+					newProc, err := p.startProcess()
+					if err == nil && !p.closed.Load() {
+						p.mu.Lock()
+						if !p.closed.Load() && p.processes[pidx] == nil {
+							p.processes[pidx] = newProc
+							atomic.AddInt32(&p.activeCount, 1)
 						} else {
 							newProc.close()
 						}
@@ -394,22 +486,77 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 			proc.mu.Unlock()
 			p.mu.RUnlock()
 
-			// No release function needed - process handles concurrent requests
-			return proc, func() {}, nil
+			// Release queue slot when done
+			return proc, p.releaseQueueSlot, nil
 		}
 		proc.mu.Unlock()
 	}
 	p.mu.RUnlock()
 
-	// No ready processes, start a new one (this should be rare)
-	proc, err := p.startProcess()
+	// No ready processes - try to scale up (lazy mode)
+	proc, _, err := p.tryScaleUp()
+	if err == nil {
+		return proc, p.releaseQueueSlot, nil
+	}
+
+	// All slots full, start temporary process
+	proc, err = p.startProcess()
 	if err != nil {
+		p.releaseQueueSlot()
 		return nil, nil, err
 	}
 
+	// Return with cleanup for temporary process
 	return proc, func() {
 		proc.close()
+		p.releaseQueueSlot()
 	}, nil
+}
+
+// needsRecycle checks if a process should be recycled based on config
+func (p *pool) needsRecycle(proc *process) bool {
+	if p.maxRequestsPerProc > 0 && atomic.LoadInt64(&proc.requestCount) >= p.maxRequestsPerProc {
+		return true
+	}
+	if p.maxProcessAge > 0 && time.Since(proc.startTime) >= p.maxProcessAge {
+		return true
+	}
+	return false
+}
+
+// releaseQueueSlot releases a slot in the queue semaphore
+func (p *pool) releaseQueueSlot() {
+	if p.queueSem != nil {
+		select {
+		case <-p.queueSem:
+		default:
+		}
+	}
+}
+
+// tryScaleUp attempts to start a new process in an empty slot (lazy scaling)
+func (p *pool) tryScaleUp() (*process, int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+
+	if p.closed.Load() {
+		return nil, -1, errors.New("pool is closed")
+	}
+
+	// Find an empty slot
+	for i, proc := range p.processes {
+		if proc == nil {
+			newProc, err := p.startProcess()
+			if err != nil {
+				return nil, -1, err
+			}
+			p.processes[i] = newProc
+			atomic.AddInt32(&p.activeCount, 1)
+			return newProc, i, nil
+		}
+	}
+
+	return nil, -1, errors.New("no empty slots")
 }
 
 func (p *pool) healthChecker(interval time.Duration) {
@@ -432,24 +579,55 @@ func (p *pool) healthChecker(interval time.Duration) {
 
 			for i, proc := range processes {
 				if proc == nil {
-					// Start new process
-					newProc, err := p.startProcess()
-					if err == nil {
-						p.mu.Lock()
-						if !p.closed.Load() && p.processes[i] == nil {
-							p.processes[i] = newProc
-						} else {
-							newProc.close()
+					// Only start new process if below minimum pool size
+					if int(atomic.LoadInt32(&p.activeCount)) < p.minSize || p.minSize == 0 {
+						newProc, err := p.startProcess()
+						if err == nil {
+							p.mu.Lock()
+							if !p.closed.Load() && p.processes[i] == nil {
+								p.processes[i] = newProc
+								atomic.AddInt32(&p.activeCount, 1)
+							} else {
+								newProc.close()
+							}
+							p.mu.Unlock()
 						}
-						p.mu.Unlock()
 					}
+					continue
+				}
+
+				// Check if process needs recycling (proactive cleanup during idle)
+				if p.needsRecycle(proc) {
+					p.mu.Lock()
+					if p.processes[i] == proc {
+						p.processes[i] = nil
+						atomic.AddInt32(&p.activeCount, -1)
+						go func(oldProc *process, pidx int) {
+							oldProc.close()
+							// Only restart if above minimum pool size requirement
+							if int(atomic.LoadInt32(&p.activeCount)) < p.minSize || p.minSize == 0 {
+								newProc, err := p.startProcess()
+								if err == nil && !p.closed.Load() {
+									p.mu.Lock()
+									if !p.closed.Load() && p.processes[pidx] == nil {
+										p.processes[pidx] = newProc
+										atomic.AddInt32(&p.activeCount, 1)
+									} else {
+										newProc.close()
+									}
+									p.mu.Unlock()
+								}
+							}
+						}(proc, i)
+					}
+					p.mu.Unlock()
 					continue
 				}
 
 				// Ping check - processes can handle concurrent requests
 				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
 				_, err := proc.sendRequest(ctx, &request{
-					ID:     fmt.Sprintf("health-%d", time.Now().UnixNano()),
+					ID:     "health-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 					Method: "ping",
 				})
 				cancel()
@@ -484,6 +662,9 @@ func (p *pool) close() {
 func (proc *process) execute(ctx context.Context, code string, context map[string]any) (*response, error) {
 	// Use strconv for faster ID generation
 	id := "exec-" + strconv.FormatInt(atomic.AddInt64(&proc.requestID, 1), 10)
+
+	// Increment request count for recycling tracking
+	atomic.AddInt64(&proc.requestCount, 1)
 
 	return proc.sendRequest(ctx, &request{
 		ID:      id,
