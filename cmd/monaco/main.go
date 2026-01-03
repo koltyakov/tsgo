@@ -17,7 +17,7 @@ import (
 	"github.com/koltyakov/tsgo/internal/typegen"
 )
 
-//go:embed index.html
+//go:embed index.html styles.css app.js
 var content embed.FS
 
 // Globals available to scripts
@@ -112,13 +112,30 @@ func main() {
 
 	// Serve static files
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/" {
-			data, _ := content.ReadFile("index.html")
-			w.Header().Set("Content-Type", "text/html")
-			w.Write(data)
+		path := r.URL.Path
+		if path == "/" {
+			path = "/index.html"
+		}
+
+		// Remove leading slash for embed.FS
+		filename := path[1:]
+		data, err := content.ReadFile(filename)
+		if err != nil {
+			http.NotFound(w, r)
 			return
 		}
-		http.NotFound(w, r)
+
+		// Set content type based on extension
+		switch {
+		case filename == "index.html":
+			w.Header().Set("Content-Type", "text/html")
+		case filename == "styles.css":
+			w.Header().Set("Content-Type", "text/css")
+		case filename == "app.js":
+			w.Header().Set("Content-Type", "application/javascript")
+		}
+
+		w.Write(data)
 	})
 
 	// Execute endpoint
