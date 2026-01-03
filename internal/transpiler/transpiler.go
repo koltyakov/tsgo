@@ -2,8 +2,9 @@
 package transpiler
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
+	"hash/fnv"
+	"strconv"
+	"strings"
 	"sync"
 
 	"github.com/evanw/esbuild/pkg/api"
@@ -111,34 +112,38 @@ func (e *TranspileError) Error() string {
 	return e.Message
 }
 
-// hashCode computes a SHA-256 hash of the code.
+// hashCode computes a fast FNV-1a hash of the code.
+// FNV-1a is much faster than SHA-256 and sufficient for cache keys.
 func hashCode(code string) string {
-	h := sha256.New()
+	h := fnv.New64a()
 	h.Write([]byte(code))
-	return hex.EncodeToString(h.Sum(nil))[:16]
+	return strconv.FormatUint(h.Sum64(), 36)
 }
 
 // extractInlineSourceMap extracts the inline source map from transpiled code.
+// Uses strings.LastIndex for O(n) performance instead of manual scanning.
 func extractInlineSourceMap(code string) string {
 	const prefix = "//# sourceMappingURL=data:application/json;base64,"
-	for i := len(code) - 1; i >= 0; i-- {
-		if i+len(prefix) > len(code) {
-			continue
-		}
-		if code[i:i+len(prefix)] == prefix {
-			return code[i+len(prefix):]
-		}
+	idx := strings.LastIndex(code, prefix)
+	if idx == -1 {
+		return ""
 	}
-	return ""
+	// Trim any trailing newlines/whitespace
+	result := code[idx+len(prefix):]
+	if newlineIdx := strings.IndexByte(result, '\n'); newlineIdx != -1 {
+		result = result[:newlineIdx]
+	}
+	return strings.TrimSpace(result)
 }
 
 // lruCache is a simple LRU cache implementation.
+// Uses RWMutex for better read concurrency since cache hits are common.
 type lruCache struct {
 	capacity int
 	items    map[string]*lruItem
 	head     *lruItem
 	tail     *lruItem
-	mu       sync.Mutex
+	mu       sync.RWMutex
 }
 
 type lruItem struct {
@@ -151,15 +156,32 @@ type lruItem struct {
 func newLRUCache(capacity int) *lruCache {
 	return &lruCache{
 		capacity: capacity,
-		items:    make(map[string]*lruItem),
+		items:    make(map[string]*lruItem, capacity),
 	}
 }
 
 func (c *lruCache) get(key string) (any, bool) {
+	// Fast path: read lock to check existence
+	c.mu.RLock()
+	item, ok := c.items[key]
+	if !ok {
+		c.mu.RUnlock()
+		return nil, false
+	}
+	// Check if already at front (common case for hot items)
+	if item == c.head {
+		value := item.value
+		c.mu.RUnlock()
+		return value, true
+	}
+	c.mu.RUnlock()
+
+	// Slow path: need write lock to move to front
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	item, ok := c.items[key]
+	// Re-check after acquiring write lock
+	item, ok = c.items[key]
 	if !ok {
 		return nil, false
 	}

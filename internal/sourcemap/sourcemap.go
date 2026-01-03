@@ -90,12 +90,25 @@ func FormatError(msg string, source string, line, column int, snippet string) st
 }
 
 // decodeMappings decodes VLQ-encoded mappings string.
+// Pre-allocates slice capacity based on estimated mapping count.
 func decodeMappings(encoded string) []Mapping {
-	var mappings []Mapping
-	var line, column, sourceIndex, originalLine, originalColumn, nameIndex int
+	if len(encoded) == 0 {
+		return nil
+	}
 
+	// Estimate capacity: roughly 1 mapping per 5 characters
+	estimatedCap := len(encoded) / 5
+	if estimatedCap < 16 {
+		estimatedCap = 16
+	}
+	mappings := make([]Mapping, 0, estimatedCap)
+
+	var column, sourceIndex, originalLine, originalColumn, nameIndex int
 	generatedLine := 1
 	i := 0
+
+	// Pre-allocate values slice outside loop
+	values := make([]int, 0, 5)
 
 	for i < len(encoded) {
 		c := encoded[i]
@@ -112,8 +125,8 @@ func decodeMappings(encoded string) []Mapping {
 			continue
 		}
 
-		// Decode segment
-		var values []int
+		// Decode segment - reuse values slice
+		values = values[:0]
 		for i < len(encoded) && encoded[i] != ',' && encoded[i] != ';' {
 			val, consumed := decodeVLQ(encoded[i:])
 			values = append(values, val)
@@ -147,8 +160,6 @@ func decodeMappings(encoded string) []Mapping {
 			})
 		}
 	}
-
-	_ = line // unused
 
 	return mappings
 }

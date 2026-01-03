@@ -13,6 +13,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -163,14 +164,8 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 	defer release()
 
-	// Prepare context
-	context := make(map[string]any)
-	for k, v := range globals {
-		context[k] = v
-	}
-
-	// Send execute request
-	resp, err := proc.execute(ctx, code, context)
+	// Send execute request - pass globals directly, no need to copy
+	resp, err := proc.execute(ctx, code, globals)
 	if err != nil {
 		return nil, err
 	}
@@ -487,7 +482,8 @@ func (p *pool) close() {
 }
 
 func (proc *process) execute(ctx context.Context, code string, context map[string]any) (*response, error) {
-	id := fmt.Sprintf("exec-%d", atomic.AddInt64(&proc.requestID, 1))
+	// Use strconv for faster ID generation
+	id := "exec-" + strconv.FormatInt(atomic.AddInt64(&proc.requestID, 1), 10)
 
 	return proc.sendRequest(ctx, &request{
 		ID:      id,

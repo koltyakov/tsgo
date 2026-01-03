@@ -78,8 +78,13 @@ type Builder struct {
 }
 
 // NewBuilder creates a new TypeScript definition builder.
+// Pre-allocates small capacity for common use cases.
 func NewBuilder() *Builder {
-	return &Builder{}
+	return &Builder{
+		interfaces: make([]string, 0, 4),
+		globals:    make([]string, 0, 8),
+		functions:  make([]string, 0, 4),
+	}
 }
 
 // AddInterface adds an interface definition.
@@ -122,8 +127,22 @@ func (b *Builder) AddFunction(name, params, returnType, doc string) *Builder {
 }
 
 // Build generates the final TypeScript definition file content.
+// Optimized with pre-calculated buffer capacity.
 func (b *Builder) Build() string {
+	// Estimate capacity to avoid reallocations
+	cap := 50 // "declare global {\n" + "}\n\nexport {}\n"
+	for _, iface := range b.interfaces {
+		cap += len(iface) + 10 // indentation + newlines
+	}
+	for _, global := range b.globals {
+		cap += len(global) + 5
+	}
+	for _, fn := range b.functions {
+		cap += len(fn) + 5
+	}
+
 	var sb strings.Builder
+	sb.Grow(cap)
 
 	sb.WriteString("declare global {\n")
 
@@ -134,9 +153,9 @@ func (b *Builder) Build() string {
 		for _, line := range lines {
 			sb.WriteString("  ")
 			sb.WriteString(line)
-			sb.WriteString("\n")
+			sb.WriteByte('\n')
 		}
-		sb.WriteString("\n")
+		sb.WriteByte('\n')
 	}
 
 	// Global declarations
@@ -152,7 +171,7 @@ func (b *Builder) Build() string {
 		for _, line := range lines {
 			sb.WriteString("  ")
 			sb.WriteString(line)
-			sb.WriteString("\n")
+			sb.WriteByte('\n')
 		}
 	}
 

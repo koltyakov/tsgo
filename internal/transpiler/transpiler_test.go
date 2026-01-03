@@ -142,8 +142,9 @@ func TestHashCode(t *testing.T) {
 	if h1 == h3 {
 		t.Error("different input should produce different hash")
 	}
-	if len(h1) != 16 {
-		t.Errorf("expected hash length 16, got %d", len(h1))
+	// FNV-1a 64-bit produces base36 string of ~13 chars
+	if len(h1) == 0 || len(h1) > 16 {
+		t.Errorf("expected non-empty hash, got length %d", len(h1))
 	}
 }
 

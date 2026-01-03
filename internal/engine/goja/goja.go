@@ -61,35 +61,27 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 	defer release()
 
-	// Set up context cancellation
-	done := make(chan struct{})
-	defer close(done)
+	// Only spawn cancellation goroutine if context has a deadline
+	// This avoids goroutine overhead for simple executions
+	if _, hasDeadline := ctx.Deadline(); hasDeadline {
+		done := make(chan struct{})
+		defer close(done)
 
-	go func() {
-		select {
-		case <-ctx.Done():
-			runtime.Interrupt("execution timeout")
-		case <-done:
-		}
-	}()
+		go func() {
+			select {
+			case <-ctx.Done():
+				runtime.Interrupt("execution timeout")
+			case <-done:
+			}
+		}()
+	}
 
-	// Track injected globals for cleanup
-	injectedGlobals := make([]string, 0, len(globals))
-
-	// Inject globals
+	// Inject globals directly - runtime is cleared on release anyway
 	for name, value := range globals {
 		if err := runtime.Set(name, value); err != nil {
 			return nil, fmt.Errorf("failed to set global %s: %w", name, err)
 		}
-		injectedGlobals = append(injectedGlobals, name)
 	}
-
-	// Ensure cleanup of injected globals (defense in depth)
-	defer func() {
-		for _, name := range injectedGlobals {
-			_ = runtime.Set(name, goja.Undefined())
-		}
-	}()
 
 	// Wrap code to extract default export
 	wrappedCode := wrapCodeForExport(code)
@@ -128,86 +120,66 @@ func (e *Engine) Close() error {
 	return nil
 }
 
-// wrapCodeForExport wraps code to extract the default export.
-func wrapCodeForExport(code string) string {
-	trimmed := strings.TrimSpace(code)
+// Pre-defined wrapper templates to avoid repeated string allocations
+const (
+	tsgoExportsWrapper = `(function(){var __last_result__;%s
+if(typeof __tsgo_exports__!=='undefined'&&__tsgo_exports__!==null){if(__tsgo_exports__&&typeof __tsgo_exports__.default!=='undefined'){var __d__=__tsgo_exports__.default;if(typeof __d__==='function')return __d__();return __d__}if(Object.keys(__tsgo_exports__).length>0)return __tsgo_exports__}return __last_result__})()`
 
-	// If code is already an IIFE or simple expression, return as-is
-	if strings.HasPrefix(trimmed, "(function") && strings.HasSuffix(trimmed, ")()") {
+	moduleExportsWrapper = `(function(){var exports={},module={exports:exports},__default__,__last_result__;%s
+function __i__(v){return typeof v==='function'?v():v}if(typeof __default__!=='undefined')return __i__(__default__);if(typeof module.exports.default!=='undefined')return __i__(module.exports.default);if(typeof exports.default!=='undefined')return __i__(exports.default);if(Object.keys(module.exports).length>0)return module.exports;return __last_result__})()`
+)
+
+// wrapCodeForExport wraps code to extract the default export.
+// Optimized to minimize string allocations.
+func wrapCodeForExport(code string) string {
+	// Fast path: check code length to avoid TrimSpace on large code
+	if len(code) == 0 {
 		return code
 	}
-	if strings.HasPrefix(trimmed, "(") && strings.HasSuffix(trimmed, ")") {
+
+	// Find first and last non-whitespace for trimming check
+	start := 0
+	for start < len(code) && (code[start] == ' ' || code[start] == '\t' || code[start] == '\n' || code[start] == '\r') {
+		start++
+	}
+	if start == len(code) {
 		return code
+	}
+	end := len(code) - 1
+	for end > start && (code[end] == ' ' || code[end] == '\t' || code[end] == '\n' || code[end] == '\r') {
+		end--
+	}
+	trimmed := code[start : end+1]
+
+	// Quick checks using first/last byte
+	firstByte := trimmed[0]
+	lastByte := trimmed[len(trimmed)-1]
+
+	// If code is already an IIFE, return as-is
+	if firstByte == '(' {
+		if len(trimmed) > 12 && trimmed[1] == 'f' && strings.HasPrefix(trimmed, "(function") && strings.HasSuffix(trimmed, ")()") {
+			return code
+		}
+		if lastByte == ')' {
+			return code
+		}
 	}
 
 	// Check if it's a simple expression (no statements)
-	if !strings.Contains(trimmed, ";") && !strings.Contains(trimmed, "\n") {
-		return fmt.Sprintf("(%s)", trimmed)
+	// Use IndexByte which is assembly-optimized
+	if strings.IndexByte(trimmed, ';') == -1 && strings.IndexByte(trimmed, '\n') == -1 {
+		return "(" + trimmed + ")"
 	}
 
 	// For esbuild IIFE output with GlobalName="__tsgo_exports__"
-	// The IIFE assigns the result of the inner function to __tsgo_exports__
-	// If the inner function has exports, they'll be in __tsgo_exports__
-	// If not, __tsgo_exports__ will be undefined
-	if strings.Contains(trimmed, "var __tsgo_exports__") || strings.Contains(trimmed, "__tsgo_exports__=") {
-		// esbuild wraps code as: var __tsgo_exports__ = (() => { ...code... })();
-		// For code without exports, this returns undefined
-		// We need to extract the last expression value
-		return fmt.Sprintf(`
-(function() {
-	var __last_result__;
-	%s
-	if (typeof __tsgo_exports__ !== 'undefined' && __tsgo_exports__ !== null) {
-		if (__tsgo_exports__ && typeof __tsgo_exports__.default !== 'undefined') {
-			var __default__ = __tsgo_exports__.default;
-			if (typeof __default__ === 'function') {
-				return __default__();
-			}
-			return __default__;
-		}
-		// Check if __tsgo_exports__ has any own properties
-		if (Object.keys(__tsgo_exports__).length > 0) {
-			return __tsgo_exports__;
-		}
-	}
-	return __last_result__;
-})()
-`, code)
+	// Check with IndexByte first for fast rejection
+	if strings.IndexByte(code, '_') != -1 &&
+		(strings.Contains(code, "var __tsgo_exports__") || strings.Contains(code, "__tsgo_exports__=")) {
+		return fmt.Sprintf(tsgoExportsWrapper, code)
 	}
 
 	// For code that goes through transpiler but doesn't use exports
-	// Try to capture the last expression
-	return fmt.Sprintf(`
-(function() {
-	var exports = {};
-	var module = { exports: exports };
-	var __default__;
-	var __last_result__;
-	
-	%s
-	
-	function __invoke_if_fn__(val) {
-		if (typeof val === 'function') {
-			return val();
-		}
-		return val;
-	}
-	
-	if (typeof __default__ !== 'undefined') {
-		return __invoke_if_fn__(__default__);
-	}
-	if (typeof module.exports.default !== 'undefined') {
-		return __invoke_if_fn__(module.exports.default);
-	}
-	if (typeof exports.default !== 'undefined') {
-		return __invoke_if_fn__(exports.default);
-	}
-	if (Object.keys(module.exports).length > 0) {
-		return module.exports;
-	}
-	return __last_result__;
-})()
-`, code)
+	return fmt.Sprintf(moduleExportsWrapper, code)
 }
 
 // pool manages pre-warmed GOJA runtimes.

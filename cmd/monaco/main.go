@@ -121,7 +121,7 @@ func main() {
 
 	addr := "localhost:8080"
 	fmt.Printf("Monaco editor available at http://%s\n", addr)
-	fmt.Println("Custom types: User, Config, currentUser, config, log()")
+	fmt.Println("Custom types: User, Config, currentUser, config")
 	fmt.Println("\nPress Ctrl+C to stop")
 
 	log.Fatal(http.ListenAndServe(addr, nil))

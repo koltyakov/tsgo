@@ -6,14 +6,44 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"sync"
 )
+
+// patternCache caches compiled regex patterns for restricted globals.
+var (
+	patternCache   = make(map[string]*regexp.Regexp)
+	patternCacheMu sync.RWMutex
+)
+
+// getPattern returns a cached compiled regex pattern for word boundary matching.
+func getPattern(word string) *regexp.Regexp {
+	patternCacheMu.RLock()
+	if pattern, ok := patternCache[word]; ok {
+		patternCacheMu.RUnlock()
+		return pattern
+	}
+	patternCacheMu.RUnlock()
+
+	// Compile and cache
+	patternCacheMu.Lock()
+	defer patternCacheMu.Unlock()
+
+	// Double-check after acquiring write lock
+	if pattern, ok := patternCache[word]; ok {
+		return pattern
+	}
+
+	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`)
+	patternCache[word] = pattern
+	return pattern
+}
 
 // ValidateCode checks if code contains restricted globals.
 // Uses word boundary matching to avoid false positives.
 func ValidateCode(code string, restricted []string) error {
 	for _, global := range restricted {
-		// Use word boundary to avoid false positives (e.g., "evaluate" matching "eval")
-		pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(global) + `\b`)
+		// Use cached pre-compiled pattern
+		pattern := getPattern(global)
 		if pattern.MatchString(code) {
 			return fmt.Errorf("code contains restricted global: %s", global)
 		}

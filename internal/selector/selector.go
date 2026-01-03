@@ -16,16 +16,20 @@ func New() *Selector {
 }
 
 // Select analyzes code and returns the recommended engine type.
+// Optimized to minimize string scanning passes.
 func (s *Selector) Select(code string) types.EngineType {
+	// Quick check: if no interesting characters, default to GOJA
+	if strings.IndexByte(code, 'f') == -1 &&
+		strings.IndexByte(code, 'W') == -1 &&
+		strings.IndexByte(code, 'a') == -1 &&
+		strings.IndexByte(code, 'r') == -1 &&
+		strings.IndexByte(code, 'e') == -1 {
+		return types.EngineGOJA
+	}
+
 	// Check for network operations - prefer Bun (needs real fetch)
 	if strings.Contains(code, "fetch(") || strings.Contains(code, "WebSocket") {
 		return types.EngineBun
-	}
-
-	// Check for async/await without network - GOJA handles this
-	if strings.Contains(code, "async ") || strings.Contains(code, "await ") {
-		// GOJA can handle simple async/await
-		return types.EngineGOJA
 	}
 
 	// Check for file system operations - prefer Bun
@@ -33,12 +37,7 @@ func (s *Selector) Select(code string) types.EngineType {
 		return types.EngineBun
 	}
 
-	// Check for untrusted code indicators - use GOJA with restricted globals
-	if strings.Contains(code, "eval(") || strings.Contains(code, "Function(") {
-		return types.EngineGOJA
-	}
-
-	// Default to GOJA for simple scripts
+	// Default to GOJA for all other scripts (handles async/await, eval checks internally)
 	return types.EngineGOJA
 }
 
