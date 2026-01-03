@@ -11,6 +11,24 @@ import (
 	"strings"
 )
 
+// Pre-compiled regexes for performance (compiled once at package init)
+var (
+	interfaceRe     = regexp.MustCompile(`(?m)interface\s+(\w+)\s*\{([^}]*)\}`)
+	typeAliasRe     = regexp.MustCompile(`(?m)type\s+(\w+)\s*=\s*([^;]+);`)
+	exportDefaultRe = regexp.MustCompile(`(?m)export\s+default\s+([^;]+);?`)
+	constExportRe   = regexp.MustCompile(`(?m)const\s+(\w+)\s*:\s*([^=]+)\s*=`)
+	multiLineRe     = regexp.MustCompile(`/\*[\s\S]*?\*/`)
+	singleLineRe    = regexp.MustCompile(`//.*$`)
+	propRe          = regexp.MustCompile(`^(\w+)(\?)?:\s*(.+)$`)
+	funcCallRe      = regexp.MustCompile(`^(\w+)\(`)
+	arrowFuncRe     = regexp.MustCompile(`^\([^)]*\)\s*:\s*([^=]+?)\s*=>`)
+	funcDeclRe      = regexp.MustCompile(`^function\s*\w*\s*\([^)]*\)\s*:\s*([^{]+?)\s*\{`)
+	promiseTypeRe   = regexp.MustCompile(`^Promise<(.+)>$`)
+	declareVarRe    = regexp.MustCompile(`(?m)declare\s+(?:const|var|let)\s+(\w+)\s*:\s*([^;]+);?`)
+	splitStmtRe     = regexp.MustCompile(`[;\n]`)
+	splitBodyRe     = regexp.MustCompile(`[;\n,]`)
+)
+
 // Contract represents the extracted contract from a TypeScript script.
 type Contract struct {
 	// Name is the identifier for the contract (derived from export or custom).
@@ -156,7 +174,6 @@ func (a *Analyzer) Analyze(code string) (*Contract, error) {
 // parseInterfaces extracts interface definitions from code.
 func (a *Analyzer) parseInterfaces(code string) {
 	// Match: interface Name { ... }
-	interfaceRe := regexp.MustCompile(`(?m)interface\s+(\w+)\s*\{([^}]*)\}`)
 	matches := interfaceRe.FindAllStringSubmatch(code, -1)
 
 	for _, match := range matches {
@@ -175,8 +192,7 @@ func (a *Analyzer) parseInterfaces(code string) {
 // parseTypeAliases extracts type alias definitions from code.
 func (a *Analyzer) parseTypeAliases(code string) {
 	// Match: type Name = ...;
-	typeRe := regexp.MustCompile(`(?m)type\s+(\w+)\s*=\s*([^;]+);`)
-	matches := typeRe.FindAllStringSubmatch(code, -1)
+	matches := typeAliasRe.FindAllStringSubmatch(code, -1)
 
 	for _, match := range matches {
 		name := match[1]
@@ -190,14 +206,12 @@ func (a *Analyzer) parseTypeAliases(code string) {
 // parseDefaultExport finds and parses the default export.
 func (a *Analyzer) parseDefaultExport(code string) *TypeDef {
 	// Pattern 1: export default expression;
-	exportDefaultRe := regexp.MustCompile(`(?m)export\s+default\s+([^;]+);?`)
 	if match := exportDefaultRe.FindStringSubmatch(code); match != nil {
 		expr := strings.TrimSpace(match[1])
 		return a.inferTypeFromExpression(expr, code)
 	}
 
 	// Pattern 2: const name: Type = ...; export default name;
-	constExportRe := regexp.MustCompile(`(?m)const\s+(\w+)\s*:\s*([^=]+)\s*=`)
 	if match := constExportRe.FindStringSubmatch(code); match != nil {
 		constName := match[1]
 		typeName := strings.TrimSpace(match[2])
@@ -223,7 +237,7 @@ func (a *Analyzer) inferTrailingExpression(code string) *TypeDef {
 	clean := a.removeComments(code)
 
 	// Split into statements by semicolons and newlines
-	statements := regexp.MustCompile(`[;\n]`).Split(clean, -1)
+	statements := splitStmtRe.Split(clean, -1)
 
 	// Find the last non-empty, non-declaration statement
 	for i := len(statements) - 1; i >= 0; i-- {
@@ -255,11 +269,9 @@ func (a *Analyzer) inferTrailingExpression(code string) *TypeDef {
 // removeComments removes single-line and multi-line comments from code.
 func (a *Analyzer) removeComments(code string) string {
 	// Remove multi-line comments
-	multiLineRe := regexp.MustCompile(`/\*[\s\S]*?\*/`)
 	code = multiLineRe.ReplaceAllString(code, "")
 
 	// Remove single-line comments
-	singleLineRe := regexp.MustCompile(`//.*$`)
 	lines := strings.Split(code, "\n")
 	for i, line := range lines {
 		lines[i] = singleLineRe.ReplaceAllString(line, "")
@@ -273,7 +285,7 @@ func (a *Analyzer) parseObjectBody(body string) []Property {
 	var props []Property
 
 	// Split by semicolons or newlines
-	lines := regexp.MustCompile(`[;\n,]`).Split(body, -1)
+	lines := splitBodyRe.Split(body, -1)
 
 	for _, line := range lines {
 		line = strings.TrimSpace(line)
@@ -282,7 +294,6 @@ func (a *Analyzer) parseObjectBody(body string) []Property {
 		}
 
 		// Match: name?: type or name: type
-		propRe := regexp.MustCompile(`^(\w+)(\?)?:\s*(.+)$`)
 		if match := propRe.FindStringSubmatch(line); match != nil {
 			propName := match[1]
 			optional := match[2] == "?"
@@ -499,11 +510,11 @@ func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 	}
 
 	// Function call - try to infer from return type
-	funcCallRe := regexp.MustCompile(`^(\w+)\(`)
 	if match := funcCallRe.FindStringSubmatch(expr); match != nil {
 		funcName := match[1]
-		funcDeclRe := regexp.MustCompile(`function\s+` + regexp.QuoteMeta(funcName) + `\s*\([^)]*\)\s*:\s*(\w+)`)
-		if m := funcDeclRe.FindStringSubmatch(code); m != nil {
+		// Need dynamic regex for function name lookup
+		funcDeclPattern := regexp.MustCompile(`function\s+` + regexp.QuoteMeta(funcName) + `\s*\([^)]*\)\s*:\s*(\w+)`)
+		if m := funcDeclPattern.FindStringSubmatch(code); m != nil {
 			return a.parseTypeExpression(m[1])
 		}
 	}
@@ -536,15 +547,13 @@ func (a *Analyzer) inferFunctionReturnType(expr string) *TypeDef {
 	var returnTypeStr string
 
 	// Pattern 1: Arrow function with return type - (...): Type =>
-	arrowRe := regexp.MustCompile(`^\([^)]*\)\s*:\s*([^=]+?)\s*=>`)
-	if match := arrowRe.FindStringSubmatch(expr); match != nil {
+	if match := arrowFuncRe.FindStringSubmatch(expr); match != nil {
 		returnTypeStr = strings.TrimSpace(match[1])
 	}
 
 	// Pattern 2: function(...): Type { ... }
 	if returnTypeStr == "" {
-		funcRe := regexp.MustCompile(`^function\s*\w*\s*\([^)]*\)\s*:\s*([^{]+?)\s*\{`)
-		if match := funcRe.FindStringSubmatch(expr); match != nil {
+		if match := funcDeclRe.FindStringSubmatch(expr); match != nil {
 			returnTypeStr = strings.TrimSpace(match[1])
 		}
 	}
@@ -555,8 +564,7 @@ func (a *Analyzer) inferFunctionReturnType(expr string) *TypeDef {
 
 	// For async functions, unwrap Promise<T> to get the actual return type
 	if isAsync || strings.HasPrefix(returnTypeStr, "Promise<") {
-		promiseRe := regexp.MustCompile(`^Promise<(.+)>$`)
-		if match := promiseRe.FindStringSubmatch(returnTypeStr); match != nil {
+		if match := promiseTypeRe.FindStringSubmatch(returnTypeStr); match != nil {
 			returnTypeStr = match[1]
 		}
 	}
@@ -949,8 +957,7 @@ func (a *Analyzer) extractInputs(code string) []Property {
 	seen := make(map[string]bool)
 
 	// Look for declared globals
-	declareRe := regexp.MustCompile(`(?m)declare\s+(?:const|var|let)\s+(\w+)\s*:\s*([^;]+);?`)
-	matches := declareRe.FindAllStringSubmatch(code, -1)
+	matches := declareVarRe.FindAllStringSubmatch(code, -1)
 
 	for _, match := range matches {
 		name := match[1]

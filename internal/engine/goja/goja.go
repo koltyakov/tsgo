@@ -248,16 +248,29 @@ func (p *pool) acquire(ctx context.Context) (*goja.Runtime, func(), error) {
 			}
 		}
 
-		// All runtimes busy - wait with context-aware timeout
+		// All runtimes busy - wait with timeout
+		// Use a timer instead of spawning goroutines to avoid leaks
+		waitDone := make(chan struct{})
+		timer := time.NewTimer(50 * time.Millisecond)
+
 		go func() {
 			select {
 			case <-ctx.Done():
+				p.mu.Lock()
 				p.cond.Broadcast()
-			case <-time.After(100 * time.Millisecond):
+				p.mu.Unlock()
+			case <-timer.C:
+				p.mu.Lock()
 				p.cond.Signal()
+				p.mu.Unlock()
+			case <-waitDone:
+				// Clean exit
 			}
 		}()
+
 		p.cond.Wait()
+		timer.Stop()
+		close(waitDone)
 	}
 }
 

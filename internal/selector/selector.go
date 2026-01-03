@@ -2,8 +2,6 @@
 package selector
 
 import (
-	"strings"
-
 	"github.com/koltyakov/tsgo/internal/types"
 )
 
@@ -16,30 +14,48 @@ func New() *Selector {
 }
 
 // Select analyzes code and returns the recommended engine type.
-// Optimized to minimize string scanning passes.
+// Uses single-pass scanning for efficiency.
 func (s *Selector) Select(code string) types.EngineType {
-	// Quick check: if no interesting characters, default to GOJA
-	if strings.IndexByte(code, 'f') == -1 &&
-		strings.IndexByte(code, 'W') == -1 &&
-		strings.IndexByte(code, 'a') == -1 &&
-		strings.IndexByte(code, 'r') == -1 &&
-		strings.IndexByte(code, 'e') == -1 {
+	// Single-pass scan for all patterns
+	n := len(code)
+	if n == 0 {
 		return types.EngineGOJA
 	}
 
-	// Check for async/await - prefer Bun (GOJA can't resolve promises)
-	if strings.Contains(code, "async ") || strings.Contains(code, "await ") {
-		return types.EngineBun
-	}
+	for i := range n {
+		c := code[i]
 
-	// Check for network operations - prefer Bun (needs real fetch)
-	if strings.Contains(code, "fetch(") || strings.Contains(code, "WebSocket") {
-		return types.EngineBun
-	}
+		// Check for 'a' - async, await
+		if c == 'a' && i+5 < n {
+			// Check for "async " (6 chars)
+			if i+6 <= n && code[i:i+6] == "async " {
+				return types.EngineBun
+			}
+			// Check for "await " (6 chars)
+			if i+6 <= n && code[i:i+6] == "await " {
+				return types.EngineBun
+			}
+		}
 
-	// Check for file system operations - prefer Bun
-	if strings.Contains(code, "readFile") || strings.Contains(code, "writeFile") {
-		return types.EngineBun
+		// Check for 'f' - fetch(
+		if c == 'f' && i+6 < n && code[i:i+6] == "fetch(" {
+			return types.EngineBun
+		}
+
+		// Check for 'W' - WebSocket
+		if c == 'W' && i+9 <= n && code[i:i+9] == "WebSocket" {
+			return types.EngineBun
+		}
+
+		// Check for 'r' - readFile
+		if c == 'r' && i+8 <= n && code[i:i+8] == "readFile" {
+			return types.EngineBun
+		}
+
+		// Check for 'w' - writeFile
+		if c == 'w' && i+9 <= n && code[i:i+9] == "writeFile" {
+			return types.EngineBun
+		}
 	}
 
 	// Default to GOJA for sync scripts
@@ -47,21 +63,49 @@ func (s *Selector) Select(code string) types.EngineType {
 }
 
 // Complexity estimates the computational complexity of code.
+// Uses single-pass counting for efficiency.
 func (s *Selector) Complexity(code string) int {
 	complexity := 0
+	n := len(code)
 
-	// Count loops
-	complexity += strings.Count(code, "for ")
-	complexity += strings.Count(code, "while ")
-	complexity += strings.Count(code, "do {")
+	for i := 0; i < n; i++ {
+		c := code[i]
 
-	// Count function definitions
-	complexity += strings.Count(code, "function ")
-	complexity += strings.Count(code, "=>")
-
-	// Count conditionals
-	complexity += strings.Count(code, "if (")
-	complexity += strings.Count(code, "switch (")
+		switch c {
+		case 'f':
+			// "for " or "function "
+			if i+4 <= n && code[i:i+4] == "for " {
+				complexity++
+			} else if i+9 <= n && code[i:i+9] == "function " {
+				complexity++
+			}
+		case 'w':
+			// "while "
+			if i+6 <= n && code[i:i+6] == "while " {
+				complexity++
+			}
+		case 'd':
+			// "do {"
+			if i+4 <= n && code[i:i+4] == "do {" {
+				complexity++
+			}
+		case '=':
+			// "=>" (arrow function)
+			if i+1 < n && code[i+1] == '>' {
+				complexity++
+			}
+		case 'i':
+			// "if ("
+			if i+4 <= n && code[i:i+4] == "if (" {
+				complexity++
+			}
+		case 's':
+			// "switch ("
+			if i+8 <= n && code[i:i+8] == "switch (" {
+				complexity++
+			}
+		}
+	}
 
 	return complexity
 }
