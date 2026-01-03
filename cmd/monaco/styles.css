@@ -20,6 +20,8 @@ header {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  position: relative;
+  z-index: 100;
 }
 
 header h1 {
@@ -88,6 +90,8 @@ main {
   display: flex;
   flex-direction: column;
   overflow: hidden;
+  position: relative;
+  z-index: 1;
 }
 
 .editor-row {
@@ -99,6 +103,7 @@ main {
 #editor-container {
   flex: 1;
   min-width: 0;
+  overflow: hidden;
 }
 
 aside {

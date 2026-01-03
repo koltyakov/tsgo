@@ -38,6 +38,18 @@ export default {
 
 const STORAGE_KEY = 'tsgo-playground-code';
 
+// GOJA unsupported features patterns
+const GOJA_UNSUPPORTED_PATTERNS = [
+  { pattern: /\basync\s+function\b/g, message: 'Async functions are not supported by GOJA engine' },
+  { pattern: /\basync\s*\(/g, message: 'Async arrow functions are not supported by GOJA engine' },
+  { pattern: /\basync\s*\w+\s*=>/g, message: 'Async arrow functions are not supported by GOJA engine' },
+  { pattern: /\bawait\s+/g, message: 'Await is not supported by GOJA engine' },
+  { pattern: /\bfetch\s*\(/g, message: 'fetch() is not available in GOJA engine' },
+  { pattern: /\bnew\s+WebSocket\s*\(/g, message: 'WebSocket is not available in GOJA engine' },
+  { pattern: /\bsetTimeout\s*\(/g, message: 'setTimeout() is not available in GOJA engine' },
+  { pattern: /\bsetInterval\s*\(/g, message: 'setInterval() is not available in GOJA engine' },
+];
+
 let ws = null;
 let monaco = null;
 let editor = null;
@@ -175,6 +187,10 @@ function initMonaco() {
       padding: { top: 15 },
       scrollBeyondLastLine: false,
       tabSize: 2,
+      fixedOverflowWidgets: true,
+      hover: {
+        above: false,  // Force hover widgets to appear below the line
+      },
     });
 
     // Save code to localStorage on change (debounced)
@@ -193,9 +209,66 @@ function initMonaco() {
     // Cmd+Enter to run
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, runCode);
 
+    // Validate code for engine compatibility
+    editor.onDidChangeModelContent(() => {
+      validateForEngine();
+    });
+
+    // Also validate when engine changes
+    document.getElementById('engine-select').addEventListener('change', validateForEngine);
+
+    // Initial validation
+    validateForEngine();
+
     // Connect to WebSocket for live type updates
     connectWebSocket();
   });
+}
+
+// Validate code for GOJA engine limitations
+function validateForEngine() {
+  if (!editor || !monaco) return;
+  
+  const engine = document.getElementById('engine-select').value;
+  const model = editor.getModel();
+  const markers = [];
+
+  // Only add warnings for GOJA engine
+  if (engine === 'goja') {
+    const code = editor.getValue();
+    const lines = code.split('\n');
+
+    for (const { pattern, message } of GOJA_UNSUPPORTED_PATTERNS) {
+      pattern.lastIndex = 0; // Reset regex state
+      let match;
+      while ((match = pattern.exec(code)) !== null) {
+        // Find line and column from match index
+        let charCount = 0;
+        let lineNumber = 1;
+        let column = 1;
+        
+        for (let i = 0; i < lines.length; i++) {
+          if (charCount + lines[i].length >= match.index) {
+            lineNumber = i + 1;
+            column = match.index - charCount + 1;
+            break;
+          }
+          charCount += lines[i].length + 1; // +1 for newline
+        }
+
+        markers.push({
+          severity: monaco.MarkerSeverity.Error,
+          message: message,
+          startLineNumber: lineNumber,
+          startColumn: column,
+          endLineNumber: lineNumber,
+          endColumn: column + match[0].length,
+        });
+      }
+    }
+  }
+
+  monaco.editor.setModelMarkers(model, 'goja-compat', markers);
 }
 
 function initResizablePanels() {
