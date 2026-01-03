@@ -1,6 +1,6 @@
 # tsgo
 
-A secure TypeScript execution library for Go with multiple execution engines.
+TypeScript execution library for Go for user-defined business logic embedding.
 
 ## Use Case: User-Defined Business Logic
 
