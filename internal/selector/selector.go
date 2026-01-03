@@ -27,6 +27,11 @@ func (s *Selector) Select(code string) types.EngineType {
 		return types.EngineGOJA
 	}
 
+	// Check for async/await - prefer Bun (GOJA can't resolve promises)
+	if strings.Contains(code, "async ") || strings.Contains(code, "await ") {
+		return types.EngineBun
+	}
+
 	// Check for network operations - prefer Bun (needs real fetch)
 	if strings.Contains(code, "fetch(") || strings.Contains(code, "WebSocket") {
 		return types.EngineBun
@@ -37,7 +42,7 @@ func (s *Selector) Select(code string) types.EngineType {
 		return types.EngineBun
 	}
 
-	// Default to GOJA for all other scripts (handles async/await, eval checks internally)
+	// Default to GOJA for sync scripts
 	return types.EngineGOJA
 }
 

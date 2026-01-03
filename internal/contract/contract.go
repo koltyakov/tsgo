@@ -432,6 +432,12 @@ func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 	expr = strings.TrimSpace(expr)
 
+	// Arrow function or async function - extract return type
+	// Pattern: async (): Promise<Type> => ... or (): Type => ...
+	if returnType := a.inferFunctionReturnType(expr); returnType != nil {
+		return returnType
+	}
+
 	// Comparison operators - always return boolean
 	if a.isComparisonExpression(expr) {
 		return &TypeDef{Kind: "primitive", Name: "boolean"}
@@ -510,6 +516,52 @@ func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 	}
 
 	return &TypeDef{Kind: "any", Name: "any"}
+}
+
+// inferFunctionReturnType extracts the return type from a function expression.
+// Handles: async (): Promise<Type> => ..., (): Type => ..., function(): Type { ... }
+// For async functions, unwraps Promise<T> to return T (since runtime resolves promises).
+func (a *Analyzer) inferFunctionReturnType(expr string) *TypeDef {
+	expr = strings.TrimSpace(expr)
+
+	// Check if it's a function expression (arrow or regular)
+	isAsync := strings.HasPrefix(expr, "async ")
+	if isAsync {
+		expr = strings.TrimPrefix(expr, "async ")
+		expr = strings.TrimSpace(expr)
+	}
+
+	// Arrow function: (...): ReturnType => ...
+	// or function expression: function(...): ReturnType { ... }
+	var returnTypeStr string
+
+	// Pattern 1: Arrow function with return type - (...): Type =>
+	arrowRe := regexp.MustCompile(`^\([^)]*\)\s*:\s*([^=]+?)\s*=>`)
+	if match := arrowRe.FindStringSubmatch(expr); match != nil {
+		returnTypeStr = strings.TrimSpace(match[1])
+	}
+
+	// Pattern 2: function(...): Type { ... }
+	if returnTypeStr == "" {
+		funcRe := regexp.MustCompile(`^function\s*\w*\s*\([^)]*\)\s*:\s*([^{]+?)\s*\{`)
+		if match := funcRe.FindStringSubmatch(expr); match != nil {
+			returnTypeStr = strings.TrimSpace(match[1])
+		}
+	}
+
+	if returnTypeStr == "" {
+		return nil
+	}
+
+	// For async functions, unwrap Promise<T> to get the actual return type
+	if isAsync || strings.HasPrefix(returnTypeStr, "Promise<") {
+		promiseRe := regexp.MustCompile(`^Promise<(.+)>$`)
+		if match := promiseRe.FindStringSubmatch(returnTypeStr); match != nil {
+			returnTypeStr = match[1]
+		}
+	}
+
+	return a.parseTypeExpression(returnTypeStr)
 }
 
 // isComparisonExpression checks if the expression contains comparison operators.

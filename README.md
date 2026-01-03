@@ -25,9 +25,9 @@ flowchart TB
     end
 
     subgraph Business ["Business Context"]
-        Inputs["Inputs\n(order, user, config)"]
-        Outputs["Outputs\n(decisions, actions)"]
-        Objects["Business Objects\n(BPMN, Rules, Flows)"]
+        Inputs["Inputs"]
+        Outputs["Outputs"]
+        Objects["Business Objects"]
     end
 
     TypeDefs -->|"Types & Globals"| Monaco

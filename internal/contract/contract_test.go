@@ -820,3 +820,65 @@ func TestAnalyzeMemberAccessExpression(t *testing.T) {
 		t.Errorf("expected TypeScript to contain 'url: string', got:\n%s", ts)
 	}
 }
+
+func TestAnalyzeAsyncFunctionExport(t *testing.T) {
+	tests := []struct {
+		name         string
+		code         string
+		expectedKind string
+		expectedName string
+	}{
+		{
+			name:         "async arrow function with Promise return type",
+			code:         `export default async (): Promise<string> => { return await 'abc'; };`,
+			expectedKind: "primitive",
+			expectedName: "string",
+		},
+		{
+			name:         "async arrow function with Promise object return",
+			code:         `export default async (): Promise<{ status: string }> => { return { status: 'ok' }; };`,
+			expectedKind: "object",
+			expectedName: "",
+		},
+		{
+			name:         "async function declaration",
+			code:         `export default async function(): Promise<number> { return 42; };`,
+			expectedKind: "primitive",
+			expectedName: "number",
+		},
+		{
+			name:         "sync arrow function with return type",
+			code:         `export default (): string => { return 'abc'; };`,
+			expectedKind: "primitive",
+			expectedName: "string",
+		},
+		{
+			name:         "sync function with return type",
+			code:         `export default function(): boolean { return true; };`,
+			expectedKind: "primitive",
+			expectedName: "boolean",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			analyzer := NewAnalyzer()
+			contract, err := analyzer.Analyze(tc.code)
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+
+			if contract.Type == nil {
+				t.Fatal("expected type definition")
+			}
+
+			if contract.Type.Kind != tc.expectedKind {
+				t.Errorf("expected kind %s, got %s", tc.expectedKind, contract.Type.Kind)
+			}
+
+			if tc.expectedName != "" && contract.Type.Name != tc.expectedName {
+				t.Errorf("expected name %s, got %s", tc.expectedName, contract.Type.Name)
+			}
+		})
+	}
+}
