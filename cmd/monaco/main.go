@@ -37,6 +37,7 @@ var globals = map[string]any{
 
 // Shared executors - reused across requests for performance
 var (
+	autoExec *tsgo.Executor
 	gojaExec *tsgo.Executor
 	bunExec  *tsgo.Executor
 	execOnce sync.Once
@@ -45,6 +46,13 @@ var (
 
 func initExecutors() {
 	execOnce.Do(func() {
+		// Create Auto executor (recommended - selects engine based on code)
+		autoExec = tsgo.New(
+			tsgo.WithEngine(tsgo.EngineAuto),
+			tsgo.WithTimeout(5*time.Second),
+			tsgo.WithGlobals(globals),
+		)
+
 		// Create GOJA executor (always available)
 		gojaExec = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineGOJA),
@@ -58,7 +66,36 @@ func initExecutors() {
 			tsgo.WithTimeout(5*time.Second),
 			tsgo.WithGlobals(globals),
 		)
+
+		// Prewarm engines in background
+		go prewarmEngines()
 	})
+}
+
+// prewarmEngines runs a simple script on each engine to warm up JIT and caches
+func prewarmEngines() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	warmupCode := `export default 1 + 1`
+
+	// Warm up GOJA
+	if gojaExec != nil {
+		if _, err := gojaExec.Execute(ctx, warmupCode); err != nil {
+			log.Printf("GOJA warmup failed: %v", err)
+		} else {
+			log.Println("GOJA engine warmed up")
+		}
+	}
+
+	// Warm up Bun (this is the important one for cold start)
+	if bunExec != nil {
+		if _, err := bunExec.Execute(ctx, warmupCode); err != nil {
+			log.Printf("Bun warmup failed: %v", err)
+		} else {
+			log.Println("Bun engine warmed up")
+		}
+	}
 }
 
 func getExecutor(engine string) *tsgo.Executor {
@@ -66,13 +103,23 @@ func getExecutor(engine string) *tsgo.Executor {
 	execMu.RLock()
 	defer execMu.RUnlock()
 
-	if engine == "bun" && bunExec != nil {
-		return bunExec
+	switch engine {
+	case "bun":
+		if bunExec != nil {
+			return bunExec
+		}
+		return gojaExec
+	case "goja":
+		return gojaExec
+	default: // "auto" or any other value
+		return autoExec
 	}
-	return gojaExec
 }
 
 func main() {
+	// Initialize and prewarm engines early
+	initExecutors()
+
 	// Create Monaco handler
 	handler := monaco.NewHandler()
 

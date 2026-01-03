@@ -36,10 +36,29 @@ export default {
 };
 `;
 
+const STORAGE_KEY = 'tsgo-playground-code';
+
 let ws = null;
 let monaco = null;
 let editor = null;
 let extraLib = null;
+
+function loadSavedCode() {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    return saved || defaultCode;
+  } catch (e) {
+    return defaultCode;
+  }
+}
+
+function saveCode(code) {
+  try {
+    localStorage.setItem(STORAGE_KEY, code);
+  } catch (e) {
+    // Ignore storage errors
+  }
+}
 
 function updateStatus(connected) {
   const dot = document.getElementById('status-dot');
@@ -144,9 +163,9 @@ function initMonaco() {
       noSyntaxValidation: false,
     });
 
-    // Create editor
+    // Create editor with saved or default code
     editor = monaco.editor.create(document.getElementById('editor-container'), {
-      value: defaultCode,
+      value: loadSavedCode(),
       language: 'typescript',
       theme: 'vs-dark',
       fontSize: 14,
@@ -156,6 +175,13 @@ function initMonaco() {
       padding: { top: 15 },
       scrollBeyondLastLine: false,
       tabSize: 2,
+    });
+
+    // Save code to localStorage on change (debounced)
+    let saveTimeout = null;
+    editor.onDidChangeModelContent(() => {
+      clearTimeout(saveTimeout);
+      saveTimeout = setTimeout(() => saveCode(editor.getValue()), 500);
     });
 
     // Update cursor position in footer

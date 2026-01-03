@@ -122,11 +122,17 @@ func (e *Engine) Close() error {
 
 // Pre-defined wrapper templates to avoid repeated string allocations
 const (
+	// tsgoExportsWrapper handles esbuild IIFE output with GlobalName="__tsgo_exports__"
+	// Detects async function results and throws an error since GOJA can't resolve promises
 	tsgoExportsWrapper = `(function(){var __last_result__;%s
-if(typeof __tsgo_exports__!=='undefined'&&__tsgo_exports__!==null){if(__tsgo_exports__&&typeof __tsgo_exports__.default!=='undefined'){var __d__=__tsgo_exports__.default;if(typeof __d__==='function')return __d__();return __d__}if(Object.keys(__tsgo_exports__).length>0)return __tsgo_exports__}return __last_result__})()`
+function __checkAsync__(v){if(v&&typeof v.then==='function'){throw new Error('Async functions are not supported by GOJA engine. Use Bun engine instead.')}return v}
+if(typeof __tsgo_exports__!=='undefined'&&__tsgo_exports__!==null){if(__tsgo_exports__&&typeof __tsgo_exports__.default!=='undefined'){var __d__=__tsgo_exports__.default;if(typeof __d__==='function')return __checkAsync__(__d__());return __d__}if(Object.keys(__tsgo_exports__).length>0)return __tsgo_exports__}return __last_result__})()`
 
+	// moduleExportsWrapper handles CommonJS-style exports
+	// Detects async function results and throws an error since GOJA can't resolve promises
 	moduleExportsWrapper = `(function(){var exports={},module={exports:exports},__default__,__last_result__;%s
-function __i__(v){return typeof v==='function'?v():v}if(typeof __default__!=='undefined')return __i__(__default__);if(typeof module.exports.default!=='undefined')return __i__(module.exports.default);if(typeof exports.default!=='undefined')return __i__(exports.default);if(Object.keys(module.exports).length>0)return module.exports;return __last_result__})()`
+function __checkAsync__(v){if(v&&typeof v.then==='function'){throw new Error('Async functions are not supported by GOJA engine. Use Bun engine instead.')}return v}
+function __i__(v){return typeof v==='function'?__checkAsync__(v()):v}if(typeof __default__!=='undefined')return __i__(__default__);if(typeof module.exports.default!=='undefined')return __i__(module.exports.default);if(typeof exports.default!=='undefined')return __i__(exports.default);if(Object.keys(module.exports).length>0)return module.exports;return __last_result__})()`
 )
 
 // wrapCodeForExport wraps code to extract the default export.

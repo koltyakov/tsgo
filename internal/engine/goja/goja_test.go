@@ -254,3 +254,44 @@ func TestExecute_ComparisonExpression(t *testing.T) {
 		})
 	}
 }
+
+func TestAsyncFunctionExport(t *testing.T) {
+	engine := New(Config{PoolSize: 2})
+	defer engine.Close()
+
+	// Test that async functions return a clear error
+	// GOJA can't resolve promises (no event loop), so we return an error
+	// instead of silently returning undefined/empty object
+
+	ctx := context.Background()
+
+	// This is what esbuild produces for async functions (simplified)
+	// The actual transpiled code uses __async helper function
+	transpilerCode := `
+var __tsgo_exports__ = (() => {
+  var __defProp = Object.defineProperty;
+  var __export = (target, all) => {
+    for (var name in all)
+      __defProp(target, name, { get: all[name], enumerable: true });
+  };
+  var stdin_exports = {};
+  __export(stdin_exports, {
+    default: () => stdin_default
+  });
+  var stdin_default = async () => {
+    return "abc";
+  };
+  return stdin_exports;
+})();
+`
+
+	_, err := engine.Execute(ctx, transpilerCode, nil)
+	if err == nil {
+		t.Fatal("expected error for async function, got nil")
+	}
+
+	// Should return a clear error message about async not being supported
+	if !strings.Contains(err.Error(), "Async functions are not supported") {
+		t.Errorf("expected async not supported error, got: %v", err)
+	}
+}

@@ -194,6 +194,79 @@ tsgo.New(
 )
 ```
 
+## Script Results Interpretation
+
+tsgo extracts a single result value from each script execution. The result is determined using the following priority:
+
+### 1. `export default` (Recommended)
+
+The most explicit and recommended way to return a result:
+
+```typescript
+// Object export
+export default { status: 'success', count: 42 };
+
+// Variable export
+const result = computeValue();
+export default result;
+
+// Inline expression
+export default items.filter(x => x.active).length;
+```
+
+### 2. `export default function` / `async function`
+
+When the default export is a function, tsgo automatically invokes it and returns the result:
+
+```typescript
+// Sync function — called automatically, returns "hello"
+export default function() {
+  return "hello";
+}
+
+// Arrow function — also called automatically
+export default () => ({ computed: true, value: 123 });
+
+// Async function — requires Bun engine (GOJA will error)
+export default async (): Promise<string> => {
+  const data = await fetchData();
+  return data.result;
+};
+```
+
+> **Note:** Async functions require the **Bun engine**. If you use `EngineAuto` (default), async code is automatically routed to Bun. If you explicitly select GOJA for async code, you'll receive a clear error message.
+
+### 3. Last Expression (Implicit)
+
+For simple scripts without exports, the last expression's value is returned:
+
+```typescript
+// Simple expression — returns 15
+const x = 10;
+const y = 5;
+x + y
+
+// Comparison — returns true
+const a = 5;
+const b = 3;
+a > b
+
+// Object literal — returns the object
+const name = "test";
+({ name, timestamp: Date.now() })
+```
+
+> **Note:** The last expression must be a valid JavaScript expression (not a statement). Wrapping object literals in parentheses `({...})` ensures they're treated as expressions.
+
+### Priority Summary
+
+| Pattern | Priority | Use Case |
+|---------|----------|----------|
+| `export default value` | 1st | Explicit static values |
+| `export default fn()` | 1st | Functions auto-invoked |
+| Last expression | 2nd | Quick scripts, REPL-style |
+
+
 ## Contract Generation
 
 Extract TypeScript type definitions and JSON Schema from scripts for mapping, validation, or form generation:
@@ -257,20 +330,24 @@ http.ListenAndServe(":8080", nil)
 
 ```
 github.com/koltyakov/tsgo
-├── tsgo.go              # Public API
+├── tsgo.go                 # Public API and executor
 ├── internal/
-│   ├── types/           # Core types
-│   ├── engine/
-│   │   ├── goja/        # GOJA engine
-│   │   └── bun/         # Bun engine
-│   ├── transpiler/      # TypeScript transpiler
-│   ├── selector/        # Engine selection
-│   ├── sandbox/         # Security sandboxing
-│   ├── sourcemap/       # Source map handling
-│   ├── typegen/         # Type definition generation
-│   ├── contract/        # Contract extraction
-│   └── monaco/          # Monaco editor integration
-└── cmd/basic/           # Example application
+│   ├── types/              # Core types and interfaces
+│   ├── engine/             # Execution engines
+│   │   ├── goja/           # GOJA engine (pure Go, sync only)
+│   │   └── bun/            # Bun engine (async, network capable)
+│   ├── transpiler/         # TypeScript → JavaScript (esbuild)
+│   ├── selector/           # Automatic engine selection
+│   ├── sandbox/            # Security sandboxing
+│   ├── sourcemap/          # Source map handling
+│   ├── typegen/            # Type definition generation
+│   ├── contract/           # Contract extraction & JSON Schema
+│   ├── monaco/             # Monaco editor integration
+│   └── benchmark/          # Performance benchmarks
+└── cmd/
+    ├── basic/              # Basic usage example
+    ├── monaco/             # Monaco playground demo
+    └── benchmark/          # Benchmark runner
 ```
 
 ## License
