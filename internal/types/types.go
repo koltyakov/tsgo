@@ -15,8 +15,6 @@ const (
 	EngineGOJA
 	// EngineBun uses an external Bun process for execution.
 	EngineBun
-	// EngineWASM uses WebAssembly sandbox for maximum isolation.
-	EngineWASM
 )
 
 func (e EngineType) String() string {
@@ -27,8 +25,6 @@ func (e EngineType) String() string {
 		return "goja"
 	case EngineBun:
 		return "bun"
-	case EngineWASM:
-		return "wasm"
 	default:
 		return "unknown"
 	}
@@ -52,11 +48,6 @@ type SecurityPolicy struct {
 	AllowedPaths []string
 	// RestrictedGlobals are globals that should be blocked from scripts.
 	RestrictedGlobals []string
-	// UntrustedSource indicates the code comes from an untrusted source,
-	// forcing the use of WASM sandbox.
-	UntrustedSource bool
-	// MaxMemoryMB limits memory usage (0 = no limit, only enforced in WASM).
-	MaxMemoryMB int
 	// MaxExecutionTime limits script execution time.
 	MaxExecutionTime time.Duration
 }
@@ -67,8 +58,6 @@ func DefaultSecurityPolicy() SecurityPolicy {
 		NetworkAccess:    false,
 		DiskAccess:       false,
 		AllowedPaths:     nil,
-		UntrustedSource:  false,
-		MaxMemoryMB:      64,
 		MaxExecutionTime: 30 * time.Second,
 	}
 }

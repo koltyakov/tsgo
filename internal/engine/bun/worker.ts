@@ -53,18 +53,20 @@ function applySecurityPolicy(policy: SecurityPolicy): void {
 
 // Execute user code and extract default export
 async function executeCode(code: string, context: Record<string, unknown>): Promise<unknown> {
-  // Inject context as globals
-  for (const [key, value] of Object.entries(context)) {
-    (globalThis as Record<string, unknown>)[key] = value;
-  }
+  // Build context injection as variable declarations
+  const contextEntries = Object.entries(context);
+  const contextDeclarations = contextEntries.length > 0
+    ? contextEntries.map(([key, value]) => 
+        `const ${key} = __context__["${key}"];`
+      ).join('\n')
+    : '';
 
-  // Create a blob URL for dynamic import
+  // Create a blob URL for dynamic import with scoped context
   const wrappedCode = `
-${code}
+const __context__ = ${JSON.stringify(context)};
+${contextDeclarations}
 
-// Export handler extraction
-const __mod__ = { default: typeof exports !== 'undefined' ? exports.default : undefined };
-export { __mod__ };
+${code}
 `;
 
   const blob = new Blob([wrappedCode], { type: 'application/typescript' });
@@ -91,11 +93,6 @@ export { __mod__ };
     return handler;
   } finally {
     URL.revokeObjectURL(url);
-
-    // Clean up injected globals
-    for (const key of Object.keys(context)) {
-      delete (globalThis as Record<string, unknown>)[key];
-    }
   }
 }
 
@@ -173,8 +170,13 @@ async function main(): Promise<void> {
       if (line.trim()) {
         try {
           const request = JSON.parse(line) as RpcRequest;
-          const response = await handleRequest(request);
-          sendResponse(response);
+          // Handle request concurrently - don't await
+          handleRequest(request).then(sendResponse).catch((err) => {
+            sendResponse({
+              id: request.id,
+              error: { message: `execution error: ${err}` }
+            });
+          });
         } catch (err) {
           sendResponse({
             id: 'unknown',

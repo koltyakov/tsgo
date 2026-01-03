@@ -6,7 +6,6 @@ require (
 	github.com/dop251/goja v0.0.0-20251201205617-2bb4c724c0f9
 	github.com/evanw/esbuild v0.27.2
 	github.com/gorilla/websocket v1.5.3
-	github.com/tetratelabs/wazero v1.11.0
 )
 
 require (

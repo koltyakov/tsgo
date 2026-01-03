@@ -197,15 +197,16 @@ type pool struct {
 	mu         sync.Mutex
 	closed     bool
 	stopCh     chan struct{}
+	nextIdx    uint64 // for round-robin selection
 }
 
 type process struct {
 	cmd       *exec.Cmd
 	stdin     io.WriteCloser
+	stdinMu   sync.Mutex // protects stdin writes
 	stdout    *bufio.Reader
 	pending   map[string]chan *response
 	mu        sync.Mutex
-	busy      bool
 	ready     bool
 	lastUsed  time.Time
 	failures  int32
@@ -315,44 +316,50 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 		return nil, nil, fmt.Errorf("pool is closed")
 	}
 
-	// Find a free process
-	for i, proc := range p.processes {
+	// Round-robin selection - each process can handle multiple concurrent requests
+	numProcs := len(p.processes)
+	startIdx := int(atomic.AddUint64(&p.nextIdx, 1) % uint64(numProcs))
+
+	// Try to find a ready process
+	for i := 0; i < numProcs; i++ {
+		idx := (startIdx + i) % numProcs
+		proc := p.processes[idx]
+
 		if proc == nil {
 			continue
 		}
-		proc.mu.Lock()
-		if !proc.busy && proc.ready {
-			proc.busy = true
-			proc.lastUsed = time.Now()
-			proc.mu.Unlock()
-			p.mu.Unlock()
 
-			return proc, func() {
-				proc.mu.Lock()
-				proc.busy = false
-				proc.mu.Unlock()
-			}, nil
-		}
-		proc.mu.Unlock()
-
-		// Check if process needs restart
+		// Check if process needs restart due to failures
 		if atomic.LoadInt32(&proc.failures) >= 3 {
-			// Restart this process
-			p.processes[i] = nil
-			go func(oldProc *process, idx int) {
+			p.processes[idx] = nil
+			go func(oldProc *process, pidx int) {
 				oldProc.close()
 				newProc, err := p.startProcess()
 				if err == nil {
 					p.mu.Lock()
-					p.processes[idx] = newProc
+					if !p.closed {
+						p.processes[pidx] = newProc
+					}
 					p.mu.Unlock()
 				}
-			}(proc, i)
+			}(proc, idx)
+			continue
 		}
+
+		proc.mu.Lock()
+		if proc.ready {
+			proc.lastUsed = time.Now()
+			proc.mu.Unlock()
+			p.mu.Unlock()
+
+			// No release function needed - process handles concurrent requests
+			return proc, func() {}, nil
+		}
+		proc.mu.Unlock()
 	}
 	p.mu.Unlock()
 
-	// All processes busy, create temporary one
+	// No ready processes, start a new one (this should be rare)
 	proc, err := p.startProcess()
 	if err != nil {
 		return nil, nil, err
@@ -383,23 +390,19 @@ func (p *pool) healthChecker(interval time.Duration) {
 					continue
 				}
 
-				// Ping check
-				proc.mu.Lock()
-				if !proc.busy {
-					ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
-					_, err := proc.sendRequest(ctx, &request{
-						ID:     fmt.Sprintf("health-%d", time.Now().UnixNano()),
-						Method: "ping",
-					})
-					cancel()
+				// Ping check - processes can handle concurrent requests
+				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				_, err := proc.sendRequest(ctx, &request{
+					ID:     fmt.Sprintf("health-%d", time.Now().UnixNano()),
+					Method: "ping",
+				})
+				cancel()
 
-					if err != nil {
-						atomic.AddInt32(&proc.failures, 1)
-					} else {
-						atomic.StoreInt32(&proc.failures, 0)
-					}
+				if err != nil {
+					atomic.AddInt32(&proc.failures, 1)
+				} else {
+					atomic.StoreInt32(&proc.failures, 0)
 				}
-				proc.mu.Unlock()
 			}
 			p.mu.Unlock()
 		}
@@ -447,13 +450,17 @@ func (proc *process) sendRequest(ctx context.Context, req *request) (*response, 
 		proc.mu.Unlock()
 	}()
 
-	// Send request
+	// Send request - protect stdin writes
 	data, err := json.Marshal(req)
 	if err != nil {
 		return nil, err
 	}
 
-	if _, err := proc.stdin.Write(append(data, '\n')); err != nil {
+	proc.stdinMu.Lock()
+	_, err = proc.stdin.Write(append(data, '\n'))
+	proc.stdinMu.Unlock()
+
+	if err != nil {
 		atomic.AddInt32(&proc.failures, 1)
 		return nil, err
 	}

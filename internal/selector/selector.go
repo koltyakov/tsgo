@@ -33,9 +33,9 @@ func (s *Selector) Select(code string) types.EngineType {
 		return types.EngineBun
 	}
 
-	// Check for untrusted code indicators - use WASM sandbox
+	// Check for untrusted code indicators - use GOJA with restricted globals
 	if strings.Contains(code, "eval(") || strings.Contains(code, "Function(") {
-		return types.EngineWASM
+		return types.EngineGOJA
 	}
 
 	// Default to GOJA for simple scripts

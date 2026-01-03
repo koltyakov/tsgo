@@ -41,8 +41,8 @@ func TestSelect_UntrustedCode(t *testing.T) {
 
 	engine := s.Select(code)
 
-	if engine != types.EngineWASM {
-		t.Errorf("expected WASM for untrusted code, got %v", engine)
+	if engine != types.EngineGOJA {
+		t.Errorf("expected GOJA for untrusted code, got %v", engine)
 	}
 }
 

@@ -4,7 +4,7 @@ A secure TypeScript execution library for Go with multiple execution engines.
 
 ## Features
 
-- **Multiple Execution Engines**: GOJA (pure Go), Bun (requires installation), WASM (sandboxed)
+- **Multiple Execution Engines**: GOJA (pure Go), Bun (requires installation)
 - **TypeScript Support**: Full TypeScript transpilation via esbuild
 - **Automatic Engine Selection**: Chooses the best engine based on code analysis
 - **Security Sandboxing**: Restrict globals, file access, and network operations
@@ -54,11 +54,10 @@ func main() {
 
 ## Engines
 
-| Engine | Pure Go | TypeScript | Async | Network | Sandbox |
-|--------|---------|------------|-------|---------|---------|
-| GOJA   | ✅      | via esbuild| ✅    | ❌      | Partial |
-| Bun    | ❌      | Native     | ✅    | ✅      | ❌      |
-| WASM   | ✅      | via esbuild| ❌    | ❌      | ✅      |
+| Engine | Pure Go | TypeScript | Async | Network |
+|--------|---------|------------|-------|---------|
+| GOJA   | ✅      | via esbuild| ✅    | ❌      |
+| Bun    | ❌      | Native     | ✅    | ✅      |
 
 ## Configuration Options
 
@@ -103,8 +102,7 @@ github.com/koltyakov/tsgo
 │   ├── types/           # Core types
 │   ├── engine/
 │   │   ├── goja/        # GOJA engine
-│   │   ├── bun/         # Bun engine
-│   │   └── wasm/        # WASM engine
+│   │   └── bun/         # Bun engine
 │   ├── transpiler/      # TypeScript transpiler
 │   ├── selector/        # Engine selection
 │   ├── sandbox/         # Security sandboxing

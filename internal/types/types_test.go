@@ -13,7 +13,6 @@ func TestEngineTypeString(t *testing.T) {
 		{EngineAuto, "auto"},
 		{EngineGOJA, "goja"},
 		{EngineBun, "bun"},
-		{EngineWASM, "wasm"},
 		{EngineType(99), "unknown"},
 	}
 
@@ -32,12 +31,6 @@ func TestDefaultSecurityPolicy(t *testing.T) {
 	}
 	if policy.DiskAccess {
 		t.Error("expected DiskAccess to be false by default")
-	}
-	if policy.UntrustedSource {
-		t.Error("expected UntrustedSource to be false by default")
-	}
-	if policy.MaxMemoryMB != 64 {
-		t.Errorf("expected MaxMemoryMB = 64, got %d", policy.MaxMemoryMB)
 	}
 	if policy.MaxExecutionTime != 30*time.Second {
 		t.Errorf("expected MaxExecutionTime = 30s, got %v", policy.MaxExecutionTime)

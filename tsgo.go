@@ -1,9 +1,8 @@
 // Package tsgo provides a secure TypeScript execution library for Go.
 //
-// tsgo supports three execution tiers with automatic engine selection:
+// tsgo supports two execution tiers with automatic engine selection:
 //   - GOJA: Pure Go JavaScript runtime (fastest, safest)
 //   - Bun: High-performance TypeScript runtime (requires Bun installed)
-//   - WASM: Sandboxed QuickJS execution via WebAssembly
 //
 // Basic usage:
 //
@@ -29,7 +28,6 @@ import (
 	"github.com/koltyakov/tsgo/internal/engine"
 	"github.com/koltyakov/tsgo/internal/engine/bun"
 	"github.com/koltyakov/tsgo/internal/engine/goja"
-	"github.com/koltyakov/tsgo/internal/engine/wasm"
 	"github.com/koltyakov/tsgo/internal/monaco"
 	"github.com/koltyakov/tsgo/internal/sandbox"
 	"github.com/koltyakov/tsgo/internal/selector"
@@ -67,9 +65,6 @@ const (
 
 	// EngineBun uses the Bun TypeScript runtime (requires Bun installation).
 	EngineBun = types.EngineBun
-
-	// EngineWASM uses QuickJS compiled to WebAssembly for sandboxed execution.
-	EngineWASM = types.EngineWASM
 )
 
 // Executor provides TypeScript execution capabilities.
@@ -78,7 +73,6 @@ type Executor struct {
 	transpiler *transpiler.Transpiler
 	gojaEng    *goja.Engine
 	bunEng     *bun.Engine
-	wasmEng    *wasm.Engine
 	selector   *selector.Selector
 }
 
@@ -230,18 +224,6 @@ func (e *Executor) getEngine(engineType EngineType) (engine.Engine, error) {
 		}
 		return e.bunEng, nil
 
-	case EngineWASM:
-		if e.wasmEng == nil {
-			eng, err := wasm.New(wasm.Config{
-				MemoryLimit: e.config.MemoryLimit,
-			})
-			if err != nil {
-				return nil, err
-			}
-			e.wasmEng = eng
-		}
-		return e.wasmEng, nil
-
 	default:
 		return nil, &ExecutionError{
 			Message: "unknown engine type",
@@ -261,12 +243,6 @@ func (e *Executor) Close() error {
 
 	if e.bunEng != nil {
 		if err := e.bunEng.Close(); err != nil {
-			lastErr = err
-		}
-	}
-
-	if e.wasmEng != nil {
-		if err := e.wasmEng.Close(); err != nil {
 			lastErr = err
 		}
 	}
