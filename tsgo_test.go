@@ -2,6 +2,8 @@ package tsgo
 
 import (
 	"context"
+	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -31,6 +33,74 @@ func TestNewWithOptions(t *testing.T) {
 	}
 	if executor.config.Timeout.Duration() != 5*time.Second {
 		t.Errorf("expected timeout 5s, got %v", executor.config.Timeout)
+	}
+}
+
+func TestWithFunctions(t *testing.T) {
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithFunctions(map[string]FunctionDef{
+			"add": {
+				TSCode: `function add(a: number, b: number): number { return a + b; }`,
+			},
+			"sqrt": {
+				TSCode: `function sqrt(x: number): number { return Math.sqrt(x); }`,
+				GoFunc: math.Sqrt,
+			},
+		}),
+	)
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+
+	// Test TSCode-only function
+	result, err := executor.Execute(ctx, `export default add(10, 20);`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := result.Value.(int64); !ok || v != 30 {
+		t.Errorf("expected 30, got %v", result.Value)
+	}
+
+	// Test TSCode+GoFunc function (GOJA uses GoFunc)
+	result, err = executor.Execute(ctx, `export default sqrt(16);`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	// GoFunc returns float64, check both possible types
+	switch v := result.Value.(type) {
+	case float64:
+		if v != 4 {
+			t.Errorf("expected 4, got %v", v)
+		}
+	case int64:
+		if v != 4 {
+			t.Errorf("expected 4, got %v", v)
+		}
+	default:
+		t.Errorf("expected numeric type, got %T", result.Value)
+	}
+}
+
+func TestWithFunctions_Bun(t *testing.T) {
+	executor := New(
+		WithEngine(EngineBun),
+		WithTimeout(5*time.Second),
+		WithFunctions(map[string]FunctionDef{
+			"multiply": {
+				TSCode: `function multiply(a: number, b: number): number { return a * b; }`,
+			},
+		}),
+	)
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	result, err := executor.Execute(ctx, `export default multiply(6, 7);`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := result.Value.(float64); !ok || v != 42 {
+		t.Errorf("expected 42, got %v (%T)", result.Value, result.Value)
 	}
 }
 
@@ -218,6 +288,217 @@ func TestMonacoClientScript(t *testing.T) {
 	script := MonacoClientScript()
 	if !strings.Contains(script, "tsgoMonaco") {
 		t.Error("expected tsgoMonaco in script")
+	}
+}
+
+func TestExecute_ClosedExecutor(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+	_ = executor.Close()
+
+	ctx := context.Background()
+	_, err := executor.Execute(ctx, `1 + 1`)
+	if err != ErrExecutorClosed {
+		t.Errorf("expected ErrExecutorClosed, got %v", err)
+	}
+}
+
+func TestExecute_EmptyCode(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	_, err := executor.Execute(ctx, ``)
+	if err != ErrEmptyCode {
+		t.Errorf("expected ErrEmptyCode, got %v", err)
+	}
+}
+
+func TestExecute_CancelledContext(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+	defer func() { _ = executor.Close() }()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Cancel immediately
+
+	_, err := executor.Execute(ctx, `1 + 1`)
+	if err == nil {
+		t.Error("expected error for cancelled context")
+	}
+}
+
+func TestExecute_BunEngine(t *testing.T) {
+	executor := New(
+		WithEngine(EngineBun),
+		WithTimeout(5*time.Second),
+	)
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	result, err := executor.Execute(ctx, `export default 2 + 3;`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := result.Value.(float64); !ok || v != 5 {
+		t.Errorf("expected 5, got %v", result.Value)
+	}
+}
+
+func TestExecute_BunWithGlobals(t *testing.T) {
+	executor := New(
+		WithEngine(EngineBun),
+		WithTimeout(5*time.Second),
+		WithGlobals(map[string]any{"factor": 10}),
+	)
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	result, err := executor.Execute(ctx, `export default 5 * factor;`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := result.Value.(float64); !ok || v != 50 {
+		t.Errorf("expected 50, got %v", result.Value)
+	}
+}
+
+func TestExecute_TopLevelAwait(t *testing.T) {
+	executor := New(
+		WithEngine(EngineBun),
+		WithTimeout(5*time.Second),
+	)
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	result, err := executor.Execute(ctx, `
+		const value = await Promise.resolve(42);
+		export default value;
+	`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if v, ok := result.Value.(float64); !ok || v != 42 {
+		t.Errorf("expected 42, got %v", result.Value)
+	}
+}
+
+func TestExecute_GOJAUnsupportedFeatures(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	_, err := executor.Execute(ctx, `
+		async function test() { return 1; }
+		export default await test();
+	`)
+	if err == nil {
+		t.Error("expected error for async in GOJA")
+	}
+	// Check for any error message related to async/await not being supported
+	errMsg := err.Error()
+	if !strings.Contains(errMsg, "async") && !strings.Contains(errMsg, "GOJA") {
+		t.Errorf("expected async/await or GOJA related error, got %v", err)
+	}
+}
+
+func TestExecute_TranspilationError(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	_, err := executor.Execute(ctx, `const x: = invalid syntax here {{{`)
+	if err == nil {
+		t.Error("expected transpilation error")
+	}
+}
+
+func TestExecute_AutoEngineSelection(t *testing.T) {
+	executor := New(WithEngine(EngineAuto))
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+
+	// Simple code should work with auto selection
+	result, err := executor.Execute(ctx, `export default 1 + 1;`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if result.Value == nil {
+		t.Error("expected result value")
+	}
+}
+
+func TestExecute_SourceMapError(t *testing.T) {
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithSourceMaps(true),
+	)
+	defer func() { _ = executor.Close() }()
+
+	ctx := context.Background()
+	_, err := executor.Execute(ctx, `
+		function test() {
+			throw new Error("test error");
+		}
+		test();
+	`)
+	if err == nil {
+		t.Error("expected error")
+	}
+}
+
+func TestClose_Idempotent(t *testing.T) {
+	executor := New(WithEngine(EngineGOJA))
+
+	// Close multiple times should not panic
+	err1 := executor.Close()
+	err2 := executor.Close()
+	err3 := executor.Close()
+
+	if err1 != nil {
+		t.Errorf("first close should succeed: %v", err1)
+	}
+	if err2 != nil {
+		t.Errorf("second close should succeed: %v", err2)
+	}
+	if err3 != nil {
+		t.Errorf("third close should succeed: %v", err3)
+	}
+}
+
+func TestClose_WithBunEngine(t *testing.T) {
+	executor := New(
+		WithEngine(EngineBun),
+		WithTimeout(5*time.Second),
+	)
+
+	// Execute something to initialize the engine
+	ctx := context.Background()
+	_, _ = executor.Execute(ctx, `export default 1;`)
+
+	err := executor.Close()
+	if err != nil {
+		t.Errorf("close should succeed: %v", err)
+	}
+}
+
+func TestExecutionError_Error(t *testing.T) {
+	err := &ExecutionError{
+		Message: "test error",
+		Code:    "some code",
+	}
+	if err.Error() != "test error" {
+		t.Errorf("expected 'test error', got %q", err.Error())
+	}
+}
+
+func TestExecutionError_Unwrap(t *testing.T) {
+	cause := errors.New("root cause")
+	err := &ExecutionError{
+		Message: "wrapper",
+		Cause:   cause,
+	}
+	if err.Unwrap() != cause {
+		t.Error("expected unwrap to return cause")
 	}
 }
 
