@@ -1,4 +1,8 @@
 // Package bun provides a Bun-based TypeScript execution engine.
+//
+// Bun is a high-performance JavaScript/TypeScript runtime that provides
+// native async/await support, fetch API, and other Web APIs that aren't
+// available in pure-Go runtimes like GOJA.
 package bun
 
 import (
@@ -23,6 +27,25 @@ import (
 
 //go:embed worker.ts
 var embeddedWorker []byte
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+// Pool size limits.
+const (
+	MinPoolSize     = 2
+	MaxPoolSize     = 8
+	DefaultPoolSize = 0 // 0 means auto-detect based on CPU count
+)
+
+// Default timing values.
+const (
+	DefaultHealthCheckInterval = 5 * time.Second
+	ProcessStartupTimeout      = 2 * time.Second
+	ProcessShutdownTimeout     = 2 * time.Second
+	HealthCheckTimeout         = 500 * time.Millisecond
+)
 
 // Config configures the Bun execution engine.
 type Config struct {
@@ -52,51 +75,42 @@ type Config struct {
 	BackgroundWarmup bool
 }
 
+// ============================================================================
+// Engine
+// ============================================================================
+
 // Engine executes TypeScript using external Bun processes.
 type Engine struct {
 	config     Config
 	pool       *pool
 	workerPath string
-	tempDir    string // Track temp directory for cleanup
+	tempDir    string
 	available  bool
 	closed     atomic.Bool
 }
 
 // New creates a new Bun execution engine.
 func New(cfg Config) (*Engine, error) {
-	if cfg.PoolSize <= 0 {
-		// Default to half the CPUs (Bun processes are heavier)
-		cfg.PoolSize = runtime.NumCPU() / 2
-		if cfg.PoolSize < 2 {
-			cfg.PoolSize = 2
+	poolSize := cfg.PoolSize
+	if poolSize <= 0 {
+		poolSize = runtime.NumCPU() / 2 // Bun processes are heavier
+		if poolSize < MinPoolSize {
+			poolSize = MinPoolSize
 		}
-		if cfg.PoolSize > 8 {
-			cfg.PoolSize = 8
+		if poolSize > MaxPoolSize {
+			poolSize = MaxPoolSize
 		}
 	}
-	if cfg.HealthCheckInterval <= 0 {
-		cfg.HealthCheckInterval = 5 * time.Second
+
+	healthInterval := cfg.HealthCheckInterval
+	if healthInterval <= 0 {
+		healthInterval = DefaultHealthCheckInterval
 	}
 
 	// Find Bun executable
-	bunPath := cfg.ExecutablePath
-	if bunPath == "" {
-		var err error
-		bunPath, err = exec.LookPath("bun")
-		if err != nil {
-			return &Engine{
-				config:    cfg,
-				available: false,
-			}, nil
-		}
-	} else {
-		// Verify the specified path exists
-		if _, err := os.Stat(bunPath); err != nil {
-			return &Engine{
-				config:    cfg,
-				available: false,
-			}, nil
-		}
+	bunPath, err := findBunExecutable(cfg.ExecutablePath)
+	if err != nil {
+		return &Engine{config: cfg, available: false}, nil
 	}
 
 	// Set up worker script
@@ -112,9 +126,9 @@ func New(cfg Config) (*Engine, error) {
 		available:  true,
 	}
 
-	// Create process pool with service mode settings
+	// Create process pool
 	engine.pool = newPool(poolConfig{
-		size:               cfg.PoolSize,
+		size:               poolSize,
 		minSize:            cfg.MinPoolSize,
 		maxRequestsPerProc: cfg.MaxRequestsPerProcess,
 		maxProcessAge:      cfg.MaxProcessAge,
@@ -123,9 +137,20 @@ func New(cfg Config) (*Engine, error) {
 	}, bunPath, workerPath)
 
 	// Start health checker
-	go engine.pool.healthChecker(cfg.HealthCheckInterval)
+	go engine.pool.healthChecker(healthInterval)
 
 	return engine, nil
+}
+
+// findBunExecutable locates the Bun executable.
+func findBunExecutable(customPath string) (string, error) {
+	if customPath != "" {
+		if _, err := os.Stat(customPath); err != nil {
+			return "", err
+		}
+		return customPath, nil
+	}
+	return exec.LookPath("bun")
 }
 
 // setupWorkerScript sets up the worker script, either from config or embedded.
@@ -163,17 +188,18 @@ func setupWorkerScript(customScript string) (workerPath string, tempDir string, 
 	return path, tmpDir, nil
 }
 
+// ============================================================================
+// Execution
+// ============================================================================
+
 // Execute runs TypeScript code in a Bun process.
 func (e *Engine) Execute(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {
 	if e.closed.Load() {
 		return nil, errors.New("bun engine is closed")
 	}
-
 	if !e.available {
 		return nil, errors.New("bun engine is not available")
 	}
-
-	// Check context before expensive operations
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -187,7 +213,7 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 	defer release()
 
-	// Send execute request - pass globals directly, no need to copy
+	// Send execute request
 	resp, err := proc.execute(ctx, code, globals)
 	if err != nil {
 		return nil, err
@@ -209,7 +235,6 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 
 	result.Value = resp.Result
-
 	if resp.Metrics != nil {
 		result.Metrics.ExecutionTime = time.Duration(resp.Metrics.ExecutionTimeMs * float64(time.Millisecond))
 	}
@@ -217,11 +242,15 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	return result, nil
 }
 
+// ============================================================================
+// Lifecycle
+// ============================================================================
+
 // Close releases engine resources.
 // It is idempotent and safe to call multiple times.
 func (e *Engine) Close() error {
 	if !e.closed.CompareAndSwap(false, true) {
-		return nil // Already closed
+		return nil
 	}
 
 	var errs []error
@@ -230,7 +259,6 @@ func (e *Engine) Close() error {
 		e.pool.close()
 	}
 
-	// Clean up temp directory
 	if e.tempDir != "" {
 		if err := os.RemoveAll(e.tempDir); err != nil {
 			errs = append(errs, fmt.Errorf("failed to clean up temp dir: %w", err))
@@ -245,6 +273,10 @@ func (e *Engine) IsAvailable() bool {
 	return e.available
 }
 
+// ============================================================================
+// Process Pool
+// ============================================================================
+
 // pool manages a pool of Bun processes.
 type pool struct {
 	processes  []*process
@@ -253,22 +285,37 @@ type pool struct {
 	mu         sync.RWMutex
 	closed     atomic.Bool
 	stopCh     chan struct{}
-	nextIdx    uint64 // for round-robin selection
+	nextIdx    uint64 // For round-robin selection
 
 	// Service mode settings
-	minSize            int           // minimum processes to keep warm
-	maxRequestsPerProc int64         // recycle after N requests (0 = never)
-	maxProcessAge      time.Duration // recycle after age (0 = never)
+	minSize            int
+	maxRequestsPerProc int64
+	maxProcessAge      time.Duration
 
 	// Request queue for backpressure
-	queueSem    chan struct{} // nil = no queuing, blocks on acquire
-	activeCount int32         // number of active processes
+	queueSem    chan struct{}
+	activeCount int32
 }
 
+// poolConfig holds service mode settings for the pool.
+type poolConfig struct {
+	size               int
+	minSize            int
+	maxRequestsPerProc int64
+	maxProcessAge      time.Duration
+	queueSize          int
+	backgroundWarmup   bool
+}
+
+// ============================================================================
+// Process Types
+// ============================================================================
+
+// process represents a single Bun worker process.
 type process struct {
 	cmd          *exec.Cmd
 	stdin        io.WriteCloser
-	stdinMu      sync.Mutex // protects stdin writes
+	stdinMu      sync.Mutex
 	stdout       *bufio.Reader
 	pending      map[string]chan *response
 	mu           sync.Mutex
@@ -276,10 +323,11 @@ type process struct {
 	lastUsed     time.Time
 	failures     int32
 	requestID    int64
-	requestCount int64     // total requests handled (for recycling)
-	startTime    time.Time // when process was started (for age-based recycling)
+	requestCount int64
+	startTime    time.Time
 }
 
+// request represents a JSON-RPC request to the worker.
 type request struct {
 	ID      string         `json:"id"`
 	Method  string         `json:"method"`
@@ -287,6 +335,7 @@ type request struct {
 	Context map[string]any `json:"context,omitempty"`
 }
 
+// response represents a JSON-RPC response from the worker.
 type response struct {
 	ID     string `json:"id"`
 	Result any    `json:"result,omitempty"`
@@ -299,15 +348,9 @@ type response struct {
 	} `json:"metrics,omitempty"`
 }
 
-// poolConfig holds service mode settings for the pool
-type poolConfig struct {
-	size               int
-	minSize            int
-	maxRequestsPerProc int64
-	maxProcessAge      time.Duration
-	queueSize          int
-	backgroundWarmup   bool
-}
+// ============================================================================
+// Pool Management
+// ============================================================================
 
 func newPool(cfg poolConfig, bunPath, workerPath string) *pool {
 	p := &pool{
@@ -320,53 +363,61 @@ func newPool(cfg poolConfig, bunPath, workerPath string) *pool {
 		maxProcessAge:      cfg.maxProcessAge,
 	}
 
-	// Set up request queue if configured
 	if cfg.queueSize > 0 {
 		p.queueSem = make(chan struct{}, cfg.queueSize)
 	}
 
-	// Start initial processes (lazy mode starts minSize, eager starts all)
+	// Determine initial size (lazy mode starts minSize, eager starts all)
 	initialSize := cfg.size
 	if cfg.minSize > 0 && cfg.minSize < cfg.size {
 		initialSize = cfg.minSize
 	}
 
 	if cfg.backgroundWarmup {
-		// Start processes in background - New() returns immediately
-		go func() {
-			for i := 0; i < initialSize; i++ {
-				if p.closed.Load() {
-					return
-				}
-				proc, err := p.startProcess()
-				if err != nil {
-					continue
-				}
-				p.mu.Lock()
-				if !p.closed.Load() {
-					p.processes[i] = proc
-					atomic.AddInt32(&p.activeCount, 1)
-				} else {
-					proc.close()
-				}
-				p.mu.Unlock()
-			}
-		}()
+		go p.warmupBackground(initialSize)
 	} else {
-		// Blocking startup - traditional behavior
-		for i := 0; i < initialSize; i++ {
-			proc, err := p.startProcess()
-			if err != nil {
-				// Log error but continue - we can start processes on demand
-				continue
-			}
-			p.processes[i] = proc
-			atomic.AddInt32(&p.activeCount, 1)
-		}
+		p.warmupBlocking(initialSize)
 	}
 
 	return p
 }
+
+// warmupBackground starts processes in the background.
+func (p *pool) warmupBackground(count int) {
+	for i := 0; i < count; i++ {
+		if p.closed.Load() {
+			return
+		}
+		proc, err := p.startProcess()
+		if err != nil {
+			continue
+		}
+		p.mu.Lock()
+		if !p.closed.Load() {
+			p.processes[i] = proc
+			atomic.AddInt32(&p.activeCount, 1)
+		} else {
+			proc.close()
+		}
+		p.mu.Unlock()
+	}
+}
+
+// warmupBlocking starts processes synchronously.
+func (p *pool) warmupBlocking(count int) {
+	for i := 0; i < count; i++ {
+		proc, err := p.startProcess()
+		if err != nil {
+			continue
+		}
+		p.processes[i] = proc
+		atomic.AddInt32(&p.activeCount, 1)
+	}
+}
+
+// ============================================================================
+// Process Lifecycle
+// ============================================================================
 
 func (p *pool) startProcess() (*process, error) {
 	cmd := exec.Command(p.bunPath, "run", p.workerPath)
@@ -382,7 +433,6 @@ func (p *pool) startProcess() (*process, error) {
 		return nil, err
 	}
 
-	// Capture stderr for debugging
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
@@ -400,11 +450,21 @@ func (p *pool) startProcess() (*process, error) {
 		startTime: time.Now(),
 	}
 
-	// Start response reader
 	go proc.readResponses()
 
-	// Wait for ready signal with shorter timeout (process usually starts in <100ms)
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Wait for ready signal
+	if err := proc.waitForReady(); err != nil {
+		proc.close()
+		return nil, err
+	}
+
+	proc.ready = true
+	return proc, nil
+}
+
+// waitForReady waits for the process to signal readiness.
+func (proc *process) waitForReady() error {
+	ctx, cancel := context.WithTimeout(context.Background(), ProcessStartupTimeout)
 	defer cancel()
 
 	resp, err := proc.sendRequest(ctx, &request{
@@ -412,18 +472,19 @@ func (p *pool) startProcess() (*process, error) {
 		Method: "ping",
 	})
 	if err != nil {
-		proc.close()
-		return nil, fmt.Errorf("process not ready: %w", err)
+		return fmt.Errorf("process not ready: %w", err)
 	}
 
 	if resp.Result != "pong" && resp.Result != "ready" {
-		proc.close()
-		return nil, fmt.Errorf("unexpected ready response: %v", resp.Result)
+		return fmt.Errorf("unexpected ready response: %v", resp.Result)
 	}
 
-	proc.ready = true
-	return proc, nil
+	return nil
 }
+
+// ============================================================================
+// Pool Acquire/Release
+// ============================================================================
 
 func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 	if p.closed.Load() {
@@ -510,14 +571,17 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 		return nil, nil, err
 	}
 
-	// Return with cleanup for temporary process
 	return proc, func() {
 		proc.close()
 		p.releaseQueueSlot()
 	}, nil
 }
 
-// needsRecycle checks if a process should be recycled based on config
+// ============================================================================
+// Process Recycling
+// ============================================================================
+
+// needsRecycle checks if a process should be recycled based on config.
 func (p *pool) needsRecycle(proc *process) bool {
 	if p.maxRequestsPerProc > 0 && atomic.LoadInt64(&proc.requestCount) >= p.maxRequestsPerProc {
 		return true
@@ -529,11 +593,9 @@ func (p *pool) needsRecycle(proc *process) bool {
 }
 
 // replaceProcessAsync closes the old process and starts a new one asynchronously.
-// If restartAlways is false, respects minSize pool settings.
 func (p *pool) replaceProcessAsync(oldProc *process, idx int, restartAlways bool) {
 	go func() {
 		oldProc.close()
-		// Check restart policy
 		if !restartAlways && p.minSize > 0 && int(atomic.LoadInt32(&p.activeCount)) >= p.minSize {
 			return
 		}
@@ -555,7 +617,7 @@ func (p *pool) replaceProcessAsync(oldProc *process, idx int, restartAlways bool
 	}()
 }
 
-// releaseQueueSlot releases a slot in the queue semaphore
+// releaseQueueSlot releases a slot in the queue semaphore.
 func (p *pool) releaseQueueSlot() {
 	if p.queueSem != nil {
 		select {
@@ -565,7 +627,7 @@ func (p *pool) releaseQueueSlot() {
 	}
 }
 
-// tryScaleUp attempts to start a new process in an empty slot (lazy scaling)
+// tryScaleUp attempts to start a new process in an empty slot (lazy scaling).
 func (p *pool) tryScaleUp() (*process, int, error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -574,7 +636,6 @@ func (p *pool) tryScaleUp() (*process, int, error) {
 		return nil, -1, errors.New("pool is closed")
 	}
 
-	// Find an empty slot
 	for i, proc := range p.processes {
 		if proc == nil {
 			newProc, err := p.startProcess()
@@ -590,6 +651,15 @@ func (p *pool) tryScaleUp() (*process, int, error) {
 	return nil, -1, errors.New("no empty slots")
 }
 
+// ============================================================================
+// Health Checking
+// ============================================================================
+
+// healthChecker runs periodic health checks on pooled processes.
+// It monitors process health via ping requests and handles:
+// - Starting new processes when pool is below minimum size
+// - Recycling processes that have exceeded their usage limits
+// - Tracking failure counts for unhealthy processes
 func (p *pool) healthChecker(interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -641,7 +711,7 @@ func (p *pool) healthChecker(interval time.Duration) {
 				}
 
 				// Ping check - processes can handle concurrent requests
-				ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+				ctx, cancel := context.WithTimeout(context.Background(), HealthCheckTimeout)
 				_, err := proc.sendRequest(ctx, &request{
 					ID:     "health-" + strconv.FormatInt(time.Now().UnixNano(), 10),
 					Method: "ping",
@@ -658,6 +728,13 @@ func (p *pool) healthChecker(interval time.Duration) {
 	}
 }
 
+// ============================================================================
+// Pool Shutdown
+// ============================================================================
+
+// close shuts down the pool and all its processes gracefully.
+// It stops the health checker and closes all active processes.
+// This method is idempotent - multiple calls are safe.
 func (p *pool) close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return // Already closed
@@ -675,6 +752,12 @@ func (p *pool) close() {
 	}
 }
 
+// ============================================================================
+// Process Communication
+// ============================================================================
+
+// execute sends code to the Bun process for execution and waits for the result.
+// It tracks request counts for process recycling decisions.
 func (proc *process) execute(ctx context.Context, code string, context map[string]any) (*response, error) {
 	// Use strconv for faster ID generation
 	id := "exec-" + strconv.FormatInt(atomic.AddInt64(&proc.requestID, 1), 10)
@@ -690,6 +773,9 @@ func (proc *process) execute(ctx context.Context, code string, context map[strin
 	})
 }
 
+// sendRequest sends a JSON-RPC style request to the Bun process.
+// It handles request/response correlation via unique IDs and supports
+// context cancellation for timeout handling.
 func (proc *process) sendRequest(ctx context.Context, req *request) (*response, error) {
 	respCh := make(chan *response, 1)
 
@@ -727,6 +813,9 @@ func (proc *process) sendRequest(ctx context.Context, req *request) (*response, 
 	}
 }
 
+// readResponses runs a continuous loop reading JSON responses from the Bun process.
+// It dispatches responses to waiting callers via the pending channel map.
+// This goroutine exits when the process stdout is closed.
 func (proc *process) readResponses() {
 	for {
 		line, err := proc.stdout.ReadBytes('\n')
@@ -752,6 +841,13 @@ func (proc *process) readResponses() {
 	}
 }
 
+// ============================================================================
+// Process Shutdown
+// ============================================================================
+
+// close gracefully shuts down the Bun process.
+// It sends a shutdown request to allow clean termination, then
+// waits briefly before forcefully killing if necessary.
 func (proc *process) close() {
 	proc.mu.Lock()
 	defer proc.mu.Unlock()
@@ -771,7 +867,7 @@ func (proc *process) close() {
 
 		select {
 		case <-done:
-		case <-time.After(2 * time.Second):
+		case <-time.After(ProcessShutdownTimeout):
 			_ = proc.cmd.Process.Kill()
 		}
 	}

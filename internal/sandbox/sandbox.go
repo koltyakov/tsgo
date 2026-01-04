@@ -1,4 +1,10 @@
-// Package sandbox provides security sandboxing utilities.
+// Package sandbox provides security sandboxing utilities for TypeScript execution.
+//
+// This package validates code and filesystem paths to ensure safe execution.
+// It provides:
+//   - Code validation to detect restricted JavaScript globals
+//   - Path validation to prevent directory traversal attacks
+//   - Default lists of commonly restricted globals
 package sandbox
 
 import (
@@ -8,6 +14,10 @@ import (
 	"strings"
 	"sync"
 )
+
+// ============================================================================
+// Pattern Caching
+// ============================================================================
 
 // patternCache caches compiled regex patterns for restricted globals.
 var (
@@ -38,6 +48,10 @@ func getPattern(word string) *regexp.Regexp {
 	return pattern
 }
 
+// ============================================================================
+// Code Validation
+// ============================================================================
+
 // ValidateCode checks if code contains restricted globals.
 // Uses word boundary matching to avoid false positives.
 func ValidateCode(code string, restricted []string) error {
@@ -50,6 +64,10 @@ func ValidateCode(code string, restricted []string) error {
 	}
 	return nil
 }
+
+// ============================================================================
+// Path Validation
+// ============================================================================
 
 // ValidatePath checks if a path is within allowed directories.
 // Resolves symlinks to prevent directory traversal attacks.
@@ -110,6 +128,10 @@ func ValidatePath(path string, allowedPaths []string) error {
 
 	return fmt.Errorf("path %s is not within allowed directories", path)
 }
+
+// ============================================================================
+// Default Restricted Globals
+// ============================================================================
 
 // RestrictedGlobals returns a list of commonly restricted JavaScript globals.
 func RestrictedGlobals() []string {

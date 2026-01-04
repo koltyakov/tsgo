@@ -4,7 +4,7 @@
 //   - GOJA: Pure Go JavaScript runtime (fastest, safest)
 //   - Bun: High-performance TypeScript runtime (requires Bun installed)
 //
-// Basic usage:
+// # Basic Usage
 //
 //	executor := tsgo.New()
 //	result, err := executor.Execute(ctx, `
@@ -12,13 +12,19 @@
 //	    greeting;
 //	`)
 //
-// With configuration:
+// # Configuration
 //
 //	executor := tsgo.New(
 //	    tsgo.WithEngine(tsgo.EngineGOJA),
 //	    tsgo.WithTimeout(5 * time.Second),
 //	    tsgo.WithGlobals(map[string]any{"userId": 123}),
 //	)
+//
+// # Type Inference
+//
+//	contract, err := tsgo.AnalyzeContract(code)
+//	ts := contract.ToTypeScript()  // TypeScript type definition
+//	js := contract.ToJSONSchema()  // JSON Schema
 package tsgo
 
 import (
@@ -43,6 +49,10 @@ import (
 	"github.com/koltyakov/tsgo/internal/types"
 )
 
+// ============================================================================
+// Type Re-exports
+// ============================================================================
+
 // Re-export types for public API
 type (
 	// EngineType represents the TypeScript execution engine type.
@@ -65,7 +75,10 @@ type (
 	FunctionDef = types.FunctionDef
 )
 
-// Engine type constants
+// ============================================================================
+// Engine Constants
+// ============================================================================
+
 const (
 	// EngineAuto automatically selects the best engine for each script.
 	EngineAuto = types.EngineAuto
@@ -77,8 +90,24 @@ const (
 	EngineBun = types.EngineBun
 )
 
+// ============================================================================
+// Executor Errors
+// ============================================================================
+
+var (
+	// ErrExecutorClosed is returned when Execute is called on a closed executor.
+	ErrExecutorClosed = errors.New("executor is closed")
+
+	// ErrEmptyCode is returned when empty code is provided.
+	ErrEmptyCode = errors.New("code cannot be empty")
+)
+
+// ============================================================================
+// Executor
+// ============================================================================
+
 // Executor provides TypeScript execution capabilities.
-// It is safe for concurrent use.
+// It is safe for concurrent use and manages engine lifecycle automatically.
 type Executor struct {
 	config     types.ExecutorConfig
 	transpiler *transpiler.Transpiler
@@ -86,10 +115,13 @@ type Executor struct {
 	bunEng     *bun.Engine
 	selector   *selector.Selector
 
-	// mu protects engine initialization to prevent data races.
-	mu     sync.RWMutex
+	mu     sync.RWMutex // Protects engine initialization and closed state
 	closed bool
 }
+
+// ============================================================================
+// Options
+// ============================================================================
 
 // Option configures an Executor.
 type Option func(*types.ExecutorConfig)
@@ -152,6 +184,10 @@ func WithPoolSize(size int) Option {
 	}
 }
 
+// ============================================================================
+// Constructor
+// ============================================================================
+
 // New creates a new TypeScript executor with the given options.
 func New(opts ...Option) *Executor {
 	config := types.DefaultConfig()
@@ -166,94 +202,41 @@ func New(opts ...Option) *Executor {
 	}
 }
 
-// ErrExecutorClosed is returned when Execute is called on a closed executor.
-var ErrExecutorClosed = errors.New("executor is closed")
-
-// ErrEmptyCode is returned when empty code is provided.
-var ErrEmptyCode = errors.New("code cannot be empty")
+// ============================================================================
+// Execution
+// ============================================================================
 
 // Execute runs TypeScript code and returns the result.
 // It is safe for concurrent use.
 func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
-	// Check if executor is closed
-	e.mu.RLock()
-	if e.closed {
-		e.mu.RUnlock()
-		return nil, ErrExecutorClosed
+	if err := e.validateExecutionState(code); err != nil {
+		return nil, err
 	}
-	e.mu.RUnlock()
-
-	// Validate input
-	if len(code) == 0 {
-		return nil, ErrEmptyCode
-	}
-
-	// Check context before expensive operations
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
-
-	// Validate security policy
-	if err := sandbox.ValidateCode(code, e.config.Security.RestrictedGlobals); err != nil {
-		return nil, &ExecutionError{
-			Message: err.Error(),
-			Code:    code,
-		}
+	if err := e.validateSecurity(code); err != nil {
+		return nil, err
 	}
 
-	// Build TSCode prelude for functions that don't have GoFunc
-	// This needs to be prepended BEFORE transpilation so TypeScript is processed
-	codeToTranspile := code
-	var tsFunctionPrelude strings.Builder
-	goFunctions := make(map[string]any) // Functions with GoFunc for GOJA
+	// Prepare code and functions
+	codeToTranspile, goFunctions := e.prepareFunctions(code)
 
-	for name, fn := range e.config.Functions {
-		if fn.GoFunc != nil {
-			goFunctions[name] = fn.GoFunc
-		}
-		if fn.TSCode != "" {
-			tsFunctionPrelude.WriteString(fn.TSCode)
-			tsFunctionPrelude.WriteByte('\n')
-		}
-	}
-
-	if tsFunctionPrelude.Len() > 0 {
-		codeToTranspile = tsFunctionPrelude.String() + codeToTranspile
-	}
-
-	// Select engine first (needed for transpilation format decision)
-	engineType := e.config.Engine
-	if engineType == EngineAuto {
-		engineType = e.selector.Select(code)
-	}
+	// Select engine (needed for transpilation format decision)
+	engineType := e.selectEngine(code)
 
 	// Check for unsupported features when GOJA is explicitly configured
-	// (auto-selection would have chosen Bun if these features were detected)
-	hasTopLevelAwait := goja.ContainsTopLevelAwait(code)
 	if engineType == EngineGOJA {
-		unsupportedFeatures := goja.DetectUnsupportedFeatures(code)
-		if len(unsupportedFeatures) > 0 {
-			return nil, &ExecutionError{
-				Message: goja.FormatUnsupportedFeaturesError(unsupportedFeatures),
-				Code:    code,
-			}
+		if err := e.validateGOJAFeatures(code); err != nil {
+			return nil, err
 		}
 	}
 
 	// Transpile TypeScript to JavaScript
-	// Use ESM format for Bun with top-level await (IIFE doesn't support it)
-	var js, sourceMap string
-	var err error
-	if engineType == EngineBun && hasTopLevelAwait {
-		js, sourceMap, err = e.transpiler.TranspileESM(codeToTranspile)
-	} else {
-		js, sourceMap, err = e.transpiler.Transpile(codeToTranspile)
-	}
+	hasTopLevelAwait := goja.ContainsTopLevelAwait(code)
+	js, sourceMap, err := e.transpileCode(codeToTranspile, engineType, hasTopLevelAwait)
 	if err != nil {
-		return nil, &ExecutionError{
-			Message: "transpilation failed: " + err.Error(),
-			Code:    code,
-		}
+		return nil, e.wrapTranspileError(err, code)
 	}
 
 	// Get or create engine
@@ -262,30 +245,9 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 		return nil, err
 	}
 
-	// Execute with timeout
-	execCtx := ctx
-	if e.config.Timeout > 0 {
-		var cancel context.CancelFunc
-		execCtx, cancel = context.WithTimeout(ctx, e.config.Timeout.Duration())
-		defer cancel()
-	}
-
-	// Prepare globals and functions for execution
-	globals := e.config.Globals
-	if globals == nil {
-		globals = make(map[string]any)
-	}
-	jsToExecute := js
-
-	// Inject functions based on engine type
-	if len(e.config.Functions) > 0 && engineType == EngineGOJA && len(goFunctions) > 0 {
-		// For GOJA: merge Go functions into globals for performance
-		// TSCode is already transpiled into the JS, GoFunc overrides it
-		merged := make(map[string]any, len(globals)+len(goFunctions))
-		maps.Copy(merged, globals)
-		maps.Copy(merged, goFunctions)
-		globals = merged
-	}
+	// Prepare execution context and globals
+	execCtx := e.prepareContext(ctx)
+	globals := e.prepareGlobals(goFunctions, engineType)
 
 	// Final context check before execution
 	if err := execCtx.Err(); err != nil {
@@ -293,83 +255,212 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	}
 
 	// Execute
-	result, err := eng.Execute(execCtx, jsToExecute, globals)
+	result, err := eng.Execute(execCtx, js, globals)
 	if err != nil {
-		// Map error through source map if available
-		if sourceMap != "" && e.config.SourceMaps {
-			sm, parseErr := sourcemap.ParseBase64(sourceMap)
-			if parseErr == nil {
-				mappedErr := sourcemap.MapError(err, sm)
-				return nil, &ExecutionError{
-					Message: mappedErr.Error(),
-					Code:    code,
-				}
-			}
-		}
-		return nil, err
+		return nil, e.mapExecutionError(err, sourceMap, code)
 	}
 
 	return result, nil
 }
+
+// validateExecutionState checks if the executor is ready for execution.
+func (e *Executor) validateExecutionState(code string) error {
+	e.mu.RLock()
+	closed := e.closed
+	e.mu.RUnlock()
+
+	if closed {
+		return ErrExecutorClosed
+	}
+	if len(code) == 0 {
+		return ErrEmptyCode
+	}
+	return nil
+}
+
+// validateSecurity checks the code against security policy.
+func (e *Executor) validateSecurity(code string) error {
+	if err := sandbox.ValidateCode(code, e.config.Security.RestrictedGlobals); err != nil {
+		return &ExecutionError{
+			Message: err.Error(),
+			Code:    code,
+		}
+	}
+	return nil
+}
+
+// validateGOJAFeatures checks for features unsupported by the GOJA engine.
+func (e *Executor) validateGOJAFeatures(code string) error {
+	unsupportedFeatures := goja.DetectUnsupportedFeatures(code)
+	if len(unsupportedFeatures) > 0 {
+		return &ExecutionError{
+			Message: goja.FormatUnsupportedFeaturesError(unsupportedFeatures),
+			Code:    code,
+		}
+	}
+	return nil
+}
+
+// prepareFunctions extracts TypeScript prelude and Go functions from config.
+func (e *Executor) prepareFunctions(code string) (codeWithPrelude string, goFunctions map[string]any) {
+	goFunctions = make(map[string]any)
+	var prelude strings.Builder
+
+	for name, fn := range e.config.Functions {
+		if fn.GoFunc != nil {
+			goFunctions[name] = fn.GoFunc
+		}
+		if fn.TSCode != "" {
+			prelude.WriteString(fn.TSCode)
+			prelude.WriteByte('\n')
+		}
+	}
+
+	if prelude.Len() > 0 {
+		return prelude.String() + code, goFunctions
+	}
+	return code, goFunctions
+}
+
+// selectEngine determines which engine to use for execution.
+func (e *Executor) selectEngine(code string) EngineType {
+	if e.config.Engine == EngineAuto {
+		return e.selector.Select(code)
+	}
+	return e.config.Engine
+}
+
+// transpileCode converts TypeScript to JavaScript.
+func (e *Executor) transpileCode(code string, engineType EngineType, hasTopLevelAwait bool) (js, sourceMap string, err error) {
+	// Use ESM format for Bun with top-level await (IIFE doesn't support it)
+	if engineType == EngineBun && hasTopLevelAwait {
+		return e.transpiler.TranspileESM(code)
+	}
+	return e.transpiler.Transpile(code)
+}
+
+// wrapTranspileError wraps a transpilation error in an ExecutionError.
+func (e *Executor) wrapTranspileError(err error, code string) error {
+	return &ExecutionError{
+		Message: "transpilation failed: " + err.Error(),
+		Code:    code,
+	}
+}
+
+// prepareContext creates an execution context with timeout if configured.
+func (e *Executor) prepareContext(ctx context.Context) context.Context {
+	if e.config.Timeout > 0 {
+		ctx, _ = context.WithTimeout(ctx, e.config.Timeout.Duration())
+	}
+	return ctx
+}
+
+// prepareGlobals merges globals with Go functions for the selected engine.
+func (e *Executor) prepareGlobals(goFunctions map[string]any, engineType EngineType) map[string]any {
+	globals := e.config.Globals
+	if globals == nil {
+		globals = make(map[string]any)
+	}
+
+	// For GOJA: merge Go functions into globals for performance
+	// TSCode is already transpiled into the JS, GoFunc overrides it
+	if len(e.config.Functions) > 0 && engineType == EngineGOJA && len(goFunctions) > 0 {
+		merged := make(map[string]any, len(globals)+len(goFunctions))
+		maps.Copy(merged, globals)
+		maps.Copy(merged, goFunctions)
+		return merged
+	}
+
+	return globals
+}
+
+// mapExecutionError maps errors through source maps when available.
+func (e *Executor) mapExecutionError(err error, sourceMap, code string) error {
+	if sourceMap != "" && e.config.SourceMaps {
+		sm, parseErr := sourcemap.ParseBase64(sourceMap)
+		if parseErr == nil {
+			mappedErr := sourcemap.MapError(err, sm)
+			return &ExecutionError{
+				Message: mappedErr.Error(),
+				Code:    code,
+			}
+		}
+	}
+	return err
+}
+
+// ============================================================================
+// Engine Management
+// ============================================================================
 
 // getEngine returns the appropriate engine, creating it if necessary.
 // Uses double-checked locking for thread-safe lazy initialization.
 func (e *Executor) getEngine(engineType EngineType) (engine.Engine, error) {
 	switch engineType {
 	case EngineGOJA:
-		// Fast path: read lock to check if engine exists
-		e.mu.RLock()
-		if e.gojaEng != nil {
-			eng := e.gojaEng
-			e.mu.RUnlock()
-			return eng, nil
-		}
-		e.mu.RUnlock()
-
-		// Slow path: write lock to create engine
-		e.mu.Lock()
-		defer e.mu.Unlock()
-
-		// Double-check after acquiring write lock
-		if e.gojaEng == nil {
-			e.gojaEng = goja.New(goja.Config{
-				PoolSize: e.config.PoolSize,
-			})
-		}
-		return e.gojaEng, nil
-
+		return e.getOrCreateGOJA()
 	case EngineBun:
-		// Fast path: read lock to check if engine exists
-		e.mu.RLock()
-		if e.bunEng != nil {
-			eng := e.bunEng
-			e.mu.RUnlock()
-			return eng, nil
-		}
-		e.mu.RUnlock()
-
-		// Slow path: write lock to create engine
-		e.mu.Lock()
-		defer e.mu.Unlock()
-
-		// Double-check after acquiring write lock
-		if e.bunEng == nil {
-			eng, err := bun.New(bun.Config{
-				PoolSize: e.config.PoolSize,
-			})
-			if err != nil {
-				return nil, err
-			}
-			e.bunEng = eng
-		}
-		return e.bunEng, nil
-
+		return e.getOrCreateBun()
 	default:
-		return nil, &ExecutionError{
-			Message: "unknown engine type",
-		}
+		return nil, &ExecutionError{Message: "unknown engine type"}
 	}
 }
+
+// getOrCreateGOJA returns the GOJA engine, creating it if necessary.
+func (e *Executor) getOrCreateGOJA() (*goja.Engine, error) {
+	// Fast path: read lock to check if engine exists
+	e.mu.RLock()
+	if e.gojaEng != nil {
+		eng := e.gojaEng
+		e.mu.RUnlock()
+		return eng, nil
+	}
+	e.mu.RUnlock()
+
+	// Slow path: write lock to create engine
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if e.gojaEng == nil {
+		e.gojaEng = goja.New(goja.Config{
+			PoolSize: e.config.PoolSize,
+		})
+	}
+	return e.gojaEng, nil
+}
+
+// getOrCreateBun returns the Bun engine, creating it if necessary.
+func (e *Executor) getOrCreateBun() (*bun.Engine, error) {
+	// Fast path: read lock to check if engine exists
+	e.mu.RLock()
+	if e.bunEng != nil {
+		eng := e.bunEng
+		e.mu.RUnlock()
+		return eng, nil
+	}
+	e.mu.RUnlock()
+
+	// Slow path: write lock to create engine
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	// Double-check after acquiring write lock
+	if e.bunEng == nil {
+		eng, err := bun.New(bun.Config{
+			PoolSize: e.config.PoolSize,
+		})
+		if err != nil {
+			return nil, err
+		}
+		e.bunEng = eng
+	}
+	return e.bunEng, nil
+}
+
+// ============================================================================
+// Lifecycle
+// ============================================================================
 
 // Close releases resources held by the executor.
 // It is idempotent and safe to call multiple times.
@@ -401,7 +492,9 @@ func (e *Executor) Close() error {
 	return errors.Join(errs...)
 }
 
-// --- Type Generation ---
+// ============================================================================
+// Type Generation
+// ============================================================================
 
 // TypeBuilder creates TypeScript type definitions for Monaco integration.
 type TypeBuilder = typegen.Builder
@@ -419,7 +512,9 @@ func GenerateContextTypes(globals map[string]any) string {
 // UnsupportedFeature represents a feature not supported by GOJA engine.
 type UnsupportedFeature = goja.UnsupportedFeature
 
-// --- Monaco Integration ---
+// ============================================================================
+// Monaco Integration
+// ============================================================================
 
 // MonacoConfig configures Monaco editor integration.
 type MonacoConfig = monaco.Config
@@ -447,7 +542,9 @@ func MonacoClientScript() string {
 	return monaco.ClientScript()
 }
 
-// --- Contract Generation ---
+// ============================================================================
+// Contract Analysis
+// ============================================================================
 
 // Contract represents the extracted contract from a TypeScript script.
 // It includes the output type definition and expected inputs.
@@ -470,7 +567,9 @@ func NewContractAnalyzer() *ContractAnalyzer {
 	return contract.NewAnalyzer()
 }
 
-// --- Type Inference ---
+// ============================================================================
+// Type Inference
+// ============================================================================
 
 // TypeInferrer provides TypeScript type inference using the TS Compiler API.
 // It requires Bun to be installed for accurate type inference.
@@ -492,6 +591,10 @@ func NewTypeInferrer() *TypeInferrer {
 func IsBunAvailable() bool {
 	return typeinfer.IsBunAvailable()
 }
+
+// ============================================================================
+// Contract Generation Helpers
+// ============================================================================
 
 // AnalyzeContract extracts the contract definition from TypeScript code.
 // It uses the TypeScript Compiler API via Bun for accurate type inference

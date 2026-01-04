@@ -1,5 +1,8 @@
 // Package typeinfer provides TypeScript type inference using the TypeScript Compiler API.
+//
 // It uses a pool of persistent Bun worker processes for efficient inference.
+// The TypeScript Compiler API provides accurate type information that would be
+// difficult to achieve through static analysis alone.
 package typeinfer
 
 import (
@@ -18,8 +21,16 @@ import (
 	"time"
 )
 
+// ============================================================================
+// Embedded Worker Script
+// ============================================================================
+
 //go:embed worker.ts
 var workerScript string
+
+// ============================================================================
+// Types
+// ============================================================================
 
 // InferenceResult represents the result of type inference
 type InferenceResult struct {
@@ -37,6 +48,10 @@ type Property struct {
 	Type     string `json:"type"`
 	Optional bool   `json:"optional"`
 }
+
+// ============================================================================
+// Inferrer
+// ============================================================================
 
 // Inferrer provides TypeScript type inference using the TS Compiler API.
 // It maintains a pool of Bun worker processes for efficient inference.
@@ -170,7 +185,9 @@ func IsBunAvailable() bool {
 	return err == nil
 }
 
-// --- Worker Pool ---
+// ============================================================================
+// Worker Pool
+// ============================================================================
 
 type workerPool struct {
 	workers    []*worker
@@ -368,7 +385,9 @@ func (p *workerPool) close() {
 	}
 }
 
-// --- Worker Methods ---
+// ============================================================================
+// Worker Methods
+// ============================================================================
 
 func (w *worker) infer(ctx context.Context, code string) (*InferenceResult, error) {
 	req := &rpcRequest{

@@ -5,6 +5,10 @@ import (
 	"time"
 )
 
+// ============================================================================
+// Engine Type Tests
+// ============================================================================
+
 func TestEngineTypeString(t *testing.T) {
 	tests := []struct {
 		engine   EngineType
@@ -23,6 +27,10 @@ func TestEngineTypeString(t *testing.T) {
 	}
 }
 
+// ============================================================================
+// Security Policy Tests
+// ============================================================================
+
 func TestDefaultSecurityPolicy(t *testing.T) {
 	policy := DefaultSecurityPolicy()
 
@@ -32,10 +40,14 @@ func TestDefaultSecurityPolicy(t *testing.T) {
 	if policy.DiskAccess {
 		t.Error("expected DiskAccess to be false by default")
 	}
-	if policy.MaxExecutionTime != 30*time.Second {
-		t.Errorf("expected MaxExecutionTime = 30s, got %v", policy.MaxExecutionTime)
+	if policy.MaxExecutionTime != DefaultMaxExecutionTime {
+		t.Errorf("expected MaxExecutionTime = %v, got %v", DefaultMaxExecutionTime, policy.MaxExecutionTime)
 	}
 }
+
+// ============================================================================
+// Configuration Tests
+// ============================================================================
 
 func TestDefaultConfig(t *testing.T) {
 	cfg := DefaultConfig()
@@ -43,13 +55,20 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Engine != EngineAuto {
 		t.Errorf("expected Engine = EngineAuto, got %v", cfg.Engine)
 	}
-	if cfg.Timeout.Duration() != 30*time.Second {
-		t.Errorf("expected Timeout = 30s, got %v", cfg.Timeout)
+	if cfg.Timeout.Duration() != DefaultTimeout {
+		t.Errorf("expected Timeout = %v, got %v", DefaultTimeout, cfg.Timeout)
+	}
+	if cfg.MemoryLimit != DefaultMemoryLimit {
+		t.Errorf("expected MemoryLimit = %v, got %v", DefaultMemoryLimit, cfg.MemoryLimit)
 	}
 	if !cfg.SourceMaps {
 		t.Error("expected SourceMaps to be true by default")
 	}
 }
+
+// ============================================================================
+// Error Tests
+// ============================================================================
 
 func TestExecutionError(t *testing.T) {
 	err := &ExecutionError{
@@ -63,6 +82,10 @@ func TestExecutionError(t *testing.T) {
 		t.Errorf("expected error message 'test error', got %q", err.Error())
 	}
 }
+
+// ============================================================================
+// Duration Tests
+// ============================================================================
 
 func TestDuration(t *testing.T) {
 	d := Duration(5 * time.Second)

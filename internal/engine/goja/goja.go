@@ -1,4 +1,8 @@
 // Package goja provides a GOJA-based JavaScript execution engine.
+//
+// GOJA is a pure-Go JavaScript runtime that provides fast, sandboxed execution
+// without requiring external dependencies. It's ideal for simple synchronous
+// scripts but lacks support for async/await and certain Web APIs.
 package goja
 
 import (
@@ -15,19 +19,37 @@ import (
 	"github.com/koltyakov/tsgo/internal/types"
 )
 
-// Sentinel errors for the GOJA engine.
-var (
-	// ErrPoolClosed is returned when trying to acquire from a closed pool.
-	ErrPoolClosed = errors.New("goja: pool is closed")
+// ============================================================================
+// Errors
+// ============================================================================
+
+// ErrPoolClosed is returned when trying to acquire from a closed pool.
+var ErrPoolClosed = errors.New("goja: pool is closed")
+
+// ============================================================================
+// Configuration
+// ============================================================================
+
+// Pool size limits.
+const (
+	MinPoolSize     = 2
+	MaxPoolSize     = 16
+	DefaultPoolSize = 0 // 0 means auto-detect based on CPU count
 )
 
 // Config configures the GOJA engine.
 type Config struct {
 	// PoolSize sets the number of pre-warmed GOJA runtimes.
+	// If <= 0, defaults to number of CPUs (capped at MaxPoolSize).
 	PoolSize int
 }
 
+// ============================================================================
+// Engine
+// ============================================================================
+
 // Engine executes JavaScript using the pure-Go GOJA runtime.
+// It maintains a pool of pre-warmed runtimes for efficient execution.
 type Engine struct {
 	config Config
 	pool   *pool
@@ -35,26 +57,19 @@ type Engine struct {
 
 // New creates a new GOJA execution engine.
 func New(cfg Config) *Engine {
-	if cfg.PoolSize <= 0 {
-		// Default to number of CPUs, capped at 16
-		cfg.PoolSize = runtime.NumCPU()
-		if cfg.PoolSize > 16 {
-			cfg.PoolSize = 16
-		}
-		if cfg.PoolSize < 2 {
-			cfg.PoolSize = 2
-		}
+	poolSize := cfg.PoolSize
+	if poolSize <= 0 {
+		poolSize = max(min(runtime.NumCPU(), MaxPoolSize), MinPoolSize)
 	}
 
 	return &Engine{
-		config: cfg,
-		pool:   newPool(cfg.PoolSize),
+		config: Config{PoolSize: poolSize},
+		pool:   newPool(poolSize),
 	}
 }
 
 // Execute runs JavaScript code in a GOJA runtime.
 func (e *Engine) Execute(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {
-	// Check context before expensive operations
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -68,10 +83,9 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 	defer release()
 
-	runtime := pooledRT.runtime
+	rt := pooledRT.runtime
 
-	// Only spawn cancellation goroutine if context has a deadline
-	// This avoids goroutine overhead for simple executions
+	// Set up cancellation for contexts with deadlines
 	if _, hasDeadline := ctx.Deadline(); hasDeadline {
 		done := make(chan struct{})
 		defer close(done)
@@ -79,29 +93,22 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 		go func() {
 			select {
 			case <-ctx.Done():
-				runtime.Interrupt("execution timeout")
+				rt.Interrupt("execution timeout")
 			case <-done:
 			}
 		}()
 	}
 
-	// Inject globals and track them for cleanup (context isolation)
-	pooledRT.userGlobalMu.Lock()
-	pooledRT.userGlobals = pooledRT.userGlobals[:0] // reset slice, keep capacity
-	for name, value := range globals {
-		if err := runtime.Set(name, value); err != nil {
-			pooledRT.userGlobalMu.Unlock()
-			return nil, fmt.Errorf("failed to set global %s: %w", name, err)
-		}
-		pooledRT.userGlobals = append(pooledRT.userGlobals, name)
+	// Inject globals (tracked for cleanup)
+	if err := pooledRT.setGlobals(globals); err != nil {
+		return nil, err
 	}
-	pooledRT.userGlobalMu.Unlock()
 
 	// Wrap code to extract default export
 	wrappedCode := wrapCodeForExport(code)
 
 	// Execute
-	val, err := runtime.RunString(wrappedCode)
+	val, err := rt.RunString(wrappedCode)
 
 	result := &types.Result{
 		Metrics: types.ExecutionMetrics{
@@ -112,18 +119,9 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 
 	if err != nil {
-		if jsErr, ok := err.(*goja.Exception); ok {
-			return nil, &types.ExecutionError{
-				Message: jsErr.Error(),
-				Stack:   jsErr.String(),
-			}
-		}
-		return nil, &types.ExecutionError{
-			Message: err.Error(),
-		}
+		return nil, wrapJSError(err)
 	}
 
-	// Export value to Go
 	result.Value = val.Export()
 	return result, nil
 }
@@ -134,17 +132,31 @@ func (e *Engine) Close() error {
 	return nil
 }
 
-// Pre-defined wrapper templates split into prefix/suffix for zero-alloc concatenation
+// wrapJSError converts a GOJA error to an ExecutionError.
+func wrapJSError(err error) error {
+	if jsErr, ok := err.(*goja.Exception); ok {
+		return &types.ExecutionError{
+			Message: jsErr.Error(),
+			Stack:   jsErr.String(),
+		}
+	}
+	return &types.ExecutionError{Message: err.Error()}
+}
+
+// ============================================================================
+// Code Wrapping
+// ============================================================================
+
+// Wrapper templates for extracting default exports.
+// Split into prefix/suffix for efficient concatenation.
 const (
-	// tsgoExportsWrapper handles esbuild IIFE output with GlobalName="__tsgo_exports__"
-	// Detects async function results and throws an error since GOJA can't resolve promises
+	// tsgoExportsWrapperPrefix/Suffix handles esbuild IIFE output with GlobalName="__tsgo_exports__"
 	tsgoExportsWrapperPrefix = `(function(){var __last_result__;`
 	tsgoExportsWrapperSuffix = `
 function __checkAsync__(v){if(v&&typeof v.then==='function'){throw new Error('Async functions are not supported by GOJA engine. Use Bun engine instead.')}return v}
 if(typeof __tsgo_exports__!=='undefined'&&__tsgo_exports__!==null){if(__tsgo_exports__&&typeof __tsgo_exports__.default!=='undefined'){var __d__=__tsgo_exports__.default;if(typeof __d__==='function')return __checkAsync__(__d__());return __d__}if(Object.keys(__tsgo_exports__).length>0)return __tsgo_exports__}return __last_result__})()`
 
-	// moduleExportsWrapper handles CommonJS-style exports
-	// Detects async function results and throws an error since GOJA can't resolve promises
+	// moduleExportsWrapperPrefix/Suffix handles CommonJS-style exports
 	moduleExportsWrapperPrefix = `(function(){var exports={},module={exports:exports},__default__,__last_result__;`
 	moduleExportsWrapperSuffix = `
 function __checkAsync__(v){if(v&&typeof v.then==='function'){throw new Error('Async functions are not supported by GOJA engine. Use Bun engine instead.')}return v}
@@ -204,6 +216,15 @@ func wrapCodeForExport(code string) string {
 	return moduleExportsWrapperPrefix + code + moduleExportsWrapperSuffix
 }
 
+// ============================================================================
+// Runtime Pool
+// ============================================================================
+
+// Pool timing constants.
+const (
+	poolAcquireRetryInterval = 50 * time.Millisecond
+)
+
 // pool manages pre-warmed GOJA runtimes.
 type pool struct {
 	runtimes []*pooledRuntime
@@ -212,12 +233,28 @@ type pool struct {
 	closed   atomic.Bool
 }
 
+// pooledRuntime wraps a GOJA runtime with tracking for context isolation.
 type pooledRuntime struct {
 	runtime      *goja.Runtime
 	busy         atomic.Bool
-	baseGlobals  map[string]struct{} // globals set during createRuntime (never cleared)
-	userGlobals  []string            // globals set during execution (cleared on release)
-	userGlobalMu sync.Mutex          // protects userGlobals
+	baseGlobals  map[string]struct{} // Globals set during createRuntime (never cleared)
+	userGlobals  []string            // Globals set during execution (cleared on release)
+	userGlobalMu sync.Mutex
+}
+
+// setGlobals injects globals into the runtime and tracks them for cleanup.
+func (pr *pooledRuntime) setGlobals(globals map[string]any) error {
+	pr.userGlobalMu.Lock()
+	defer pr.userGlobalMu.Unlock()
+
+	pr.userGlobals = pr.userGlobals[:0] // Reset slice, keep capacity
+	for name, value := range globals {
+		if err := pr.runtime.Set(name, value); err != nil {
+			return fmt.Errorf("failed to set global %s: %w", name, err)
+		}
+		pr.userGlobals = append(pr.userGlobals, name)
+	}
+	return nil
 }
 
 func newPool(size int) *pool {
@@ -248,21 +285,16 @@ func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Set up a timer for periodic wake-ups (reused across iterations)
-	timer := time.NewTimer(50 * time.Millisecond)
+	// Set up a timer for periodic wake-ups
+	timer := time.NewTimer(poolAcquireRetryInterval)
 	defer timer.Stop()
 
-	// Channel for context cancellation signaling
 	ctxDone := ctx.Done()
 
-	// Try to find a free runtime with timeout-based retry
 	for {
-		// Check context first
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
-
-		// Check if pool was closed while waiting
 		if p.closed.Load() {
 			return nil, nil, ErrPoolClosed
 		}
@@ -270,19 +302,12 @@ func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 		// Try to find a free runtime
 		for _, r := range p.runtimes {
 			if r.busy.CompareAndSwap(false, true) {
-				return r, func() {
-					clearRuntime(r)
-					r.busy.Store(false)
-					// Signal waiting goroutines
-					p.cond.Signal()
-				}, nil
+				return r, p.makeReleaseFunc(r), nil
 			}
 		}
 
-		// All runtimes busy - wait with timeout using sync.Cond
-		// Use a single goroutine to handle both context cancellation and timeout
+		// All runtimes busy - wait with timeout
 		done := make(chan struct{})
-
 		go func() {
 			select {
 			case <-ctxDone:
@@ -290,92 +315,100 @@ func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 			case <-timer.C:
 				p.cond.Signal()
 			case <-done:
-				return
 			}
 		}()
 
 		p.cond.Wait()
 		close(done)
 
-		// Reset timer for next iteration
+		// Reset timer
 		if !timer.Stop() {
 			select {
 			case <-timer.C:
 			default:
 			}
 		}
-		timer.Reset(50 * time.Millisecond)
+		timer.Reset(poolAcquireRetryInterval)
+	}
+}
+
+// makeReleaseFunc creates a release function for a pooled runtime.
+func (p *pool) makeReleaseFunc(r *pooledRuntime) func() {
+	return func() {
+		clearRuntime(r)
+		r.busy.Store(false)
+		p.cond.Signal()
 	}
 }
 
 func (p *pool) close() {
 	if !p.closed.CompareAndSwap(false, true) {
-		return // Already closed
+		return
 	}
-
-	// Wake up any waiting goroutines
 	p.cond.Broadcast()
+}
+
+// ============================================================================
+// Runtime Factory
+// ============================================================================
+
+// Globals that don't exist in GOJA and should be set to undefined.
+var undefinedGlobals = []string{
+	"fetch", "XMLHttpRequest", "WebSocket",
+	"Worker", "SharedWorker", "ServiceWorker",
+	"importScripts", "Deno", "Bun", "process", "require",
+	"__dirname", "__filename",
 }
 
 // createRuntime creates a GOJA runtime with console support.
 func createRuntime() *goja.Runtime {
-	runtime := goja.New()
+	rt := goja.New()
 
-	// Set up field name mapper
-	runtime.SetFieldNameMapper(goja.TagFieldNameMapper("json", true))
+	// Set up field name mapper for JSON tags
+	rt.SetFieldNameMapper(goja.TagFieldNameMapper("json", true))
 
-	// Set up console
-	console := runtime.NewObject()
-	_ = console.Set("log", func(call goja.FunctionCall) goja.Value {
-		return goja.Undefined()
-	})
-	_ = console.Set("error", func(call goja.FunctionCall) goja.Value {
-		return goja.Undefined()
-	})
-	_ = console.Set("warn", func(call goja.FunctionCall) goja.Value {
-		return goja.Undefined()
-	})
-	_ = console.Set("info", func(call goja.FunctionCall) goja.Value {
-		return goja.Undefined()
-	})
-	_ = runtime.Set("console", console)
+	// Set up console (no-op implementations)
+	console := rt.NewObject()
+	noopFn := func(call goja.FunctionCall) goja.Value { return goja.Undefined() }
+	_ = console.Set("log", noopFn)
+	_ = console.Set("error", noopFn)
+	_ = console.Set("warn", noopFn)
+	_ = console.Set("info", noopFn)
+	_ = rt.Set("console", console)
 
 	// Set undefined for globals that don't exist in GOJA
-	undefinedGlobals := []string{
-		"fetch", "XMLHttpRequest", "WebSocket",
-		"Worker", "SharedWorker", "ServiceWorker",
-		"importScripts", "Deno", "Bun", "process", "require",
-		"__dirname", "__filename",
-	}
 	for _, name := range undefinedGlobals {
-		_ = runtime.Set(name, goja.Undefined())
+		_ = rt.Set(name, goja.Undefined())
 	}
 
-	return runtime
+	return rt
 }
 
 // captureGlobalNames returns a set of all global property names in the runtime.
-// This is used to identify base globals that should never be cleared.
-func captureGlobalNames(runtime *goja.Runtime) map[string]struct{} {
+// Used to identify base globals that should never be cleared.
+func captureGlobalNames(rt *goja.Runtime) map[string]struct{} {
 	globals := make(map[string]struct{})
-	globalObj := runtime.GlobalObject()
+	globalObj := rt.GlobalObject()
 	for _, key := range globalObj.Keys() {
 		globals[key] = struct{}{}
 	}
 	return globals
 }
 
+// ============================================================================
+// Runtime Cleanup
+// ============================================================================
+
 // clearRuntime resets a pooled runtime for reuse, ensuring context isolation.
 // It removes all user-injected globals and any globals created during execution.
 func clearRuntime(pr *pooledRuntime) {
 	pr.runtime.ClearInterrupt()
 
-	// Clear explicitly tracked user globals first (fast path)
+	// Clear explicitly tracked user globals (fast path)
 	pr.userGlobalMu.Lock()
 	userGlobals := pr.userGlobals
 	pr.userGlobalMu.Unlock()
 
-	// Use a set to track what we've already cleared
 	cleared := make(map[string]struct{}, len(userGlobals))
 	for _, name := range userGlobals {
 		_ = pr.runtime.Set(name, goja.Undefined())
@@ -383,10 +416,8 @@ func clearRuntime(pr *pooledRuntime) {
 	}
 
 	// Scan for any globals created during execution (e.g., via globalThis.foo = ...)
-	// and remove them if they weren't part of the base runtime
 	globalObj := pr.runtime.GlobalObject()
 	for _, key := range globalObj.Keys() {
-		// Skip if already cleared or is a base global
 		if _, done := cleared[key]; done {
 			continue
 		}

@@ -1,6 +1,12 @@
 // Package contract extracts TypeScript contract definitions from scripts.
+//
 // It analyzes TypeScript code to determine the shape of the default export
-// and generates both TypeScript type definitions and JSON Schema.
+// and generates both TypeScript type definitions and JSON Schema. This is
+// useful for:
+//   - Runtime type validation
+//   - API documentation generation
+//   - Editor autocomplete support
+//   - Cross-language interoperability
 package contract
 
 import (
@@ -9,6 +15,10 @@ import (
 	"regexp"
 	"strings"
 )
+
+// ============================================================================
+// Pre-compiled Regular Expressions
+// ============================================================================
 
 // Pre-compiled regexes for performance (compiled once at package init)
 var (
@@ -25,6 +35,10 @@ var (
 	promiseTypeRe   = regexp.MustCompile(`^Promise<(.+)>$`)
 	splitStmtRe     = regexp.MustCompile(`[;\n]`)
 )
+
+// ============================================================================
+// Types
+// ============================================================================
 
 // Contract represents the extracted contract from a TypeScript script.
 type Contract struct {
@@ -87,6 +101,10 @@ type JSONSchema struct {
 	Ref         string                 `json:"$ref,omitempty"`
 	Definitions map[string]*JSONSchema `json:"$defs,omitempty"`
 }
+
+// ============================================================================
+// Analyzer
+// ============================================================================
 
 // Analyzer extracts contract definitions from TypeScript code.
 type Analyzer struct {
@@ -201,6 +219,10 @@ func extractInterfaceBody(code string, start int) (string, int) {
 	return code[start : i-1], i
 }
 
+// ============================================================================
+// Interface & Type Alias Parsing
+// ============================================================================
+
 // parseInterfaces extracts interface definitions from code.
 func (a *Analyzer) parseInterfaces(code string) {
 	// Find all interface declarations manually to handle nested braces
@@ -262,6 +284,10 @@ func (a *Analyzer) parseTypeAliases(code string) {
 		a.typeAliases[name] = typeDef
 	}
 }
+
+// ============================================================================
+// Export Parsing
+// ============================================================================
 
 // parseDefaultExport finds and parses the default export.
 func (a *Analyzer) parseDefaultExport(code string) *TypeDef {
@@ -421,6 +447,10 @@ func splitTopLevelProperties(body string) []string {
 	return result
 }
 
+// ============================================================================
+// Object & Property Parsing
+// ============================================================================
+
 // parseObjectBody parses the body of an interface or object literal.
 func (a *Analyzer) parseObjectBody(body string) []Property {
 	var props []Property
@@ -467,6 +497,10 @@ func (a *Analyzer) parseObjectBody(body string) []Property {
 
 	return props
 }
+
+// ============================================================================
+// Type Expression Parsing
+// ============================================================================
 
 // parseTypeExpression parses a TypeScript type expression string.
 func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
@@ -662,6 +696,10 @@ func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 		Nullable: nullable,
 	}
 }
+
+// ============================================================================
+// Type Inference from Expressions
+// ============================================================================
 
 // inferTypeFromExpression infers the type from an expression.
 func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
@@ -1893,6 +1931,10 @@ func (a *Analyzer) inferObjectLiteralType(expr string, code string) *TypeDef {
 	}
 }
 
+// ============================================================================
+// Helper Functions
+// ============================================================================
+
 // stripComments removes single-line (//) and multi-line (/* */) comments from code.
 func stripComments(code string) string {
 	var result strings.Builder
@@ -2378,6 +2420,10 @@ func (c *Contract) ToJSONSchemaJSON() ([]byte, error) {
 	return json.MarshalIndent(c.ToJSONSchema(), "", "  ")
 }
 
+// ============================================================================
+// TypeScript Output Generation
+// ============================================================================
+
 // typeDefToTS converts a TypeDef to TypeScript syntax.
 func typeDefToTS(t *TypeDef) string {
 	if t == nil {
@@ -2504,6 +2550,10 @@ func typeDefToTSFormatted(t *TypeDef, indent int) string {
 
 	return result
 }
+
+// ============================================================================
+// JSON Schema Generation
+// ============================================================================
 
 // typeDefToJSONSchema converts a TypeDef to JSON Schema.
 func typeDefToJSONSchema(t *TypeDef) *JSONSchema {

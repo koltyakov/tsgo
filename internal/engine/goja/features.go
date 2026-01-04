@@ -3,100 +3,104 @@ package goja
 
 import "strings"
 
+// ============================================================================
+// Unsupported Feature Detection
+// ============================================================================
+
 // UnsupportedFeature represents a feature not supported by GOJA engine.
 type UnsupportedFeature struct {
 	Name        string
 	Description string
 }
 
+// Feature descriptions for error messages.
+var featureDescriptions = map[string]string{
+	"async":     "async functions and await expressions require Bun engine",
+	"fetch":     "the Fetch API requires Bun engine",
+	"websocket": "WebSocket API requires Bun engine",
+	"fileio":    "file system operations (readFile/writeFile) require Bun engine",
+	"timers":    "setTimeout/setInterval require Bun engine for proper async behavior",
+}
+
 // DetectUnsupportedFeatures checks code for features not supported by GOJA engine.
 // Returns a list of unsupported features found in the code.
 func DetectUnsupportedFeatures(code string) []UnsupportedFeature {
 	var features []UnsupportedFeature
-	n := len(code)
-
-	// Track what we've found to avoid duplicates
 	found := make(map[string]bool)
+	n := len(code)
 
 	for i := 0; i < n; i++ {
 		c := code[i]
 
 		switch c {
 		case 'a':
-			// async/await
-			if i+6 <= n {
+			if i+6 <= n && !found["async"] {
 				sub := code[i : i+6]
-				if sub == "async " && !found["async"] {
+				if sub == "async " || sub == "await " {
 					found["async"] = true
 					features = append(features, UnsupportedFeature{
 						Name:        "async/await",
-						Description: "async functions and await expressions require Bun engine",
-					})
-				} else if sub == "await " && !found["async"] {
-					found["async"] = true
-					features = append(features, UnsupportedFeature{
-						Name:        "async/await",
-						Description: "async functions and await expressions require Bun engine",
+						Description: featureDescriptions["async"],
 					})
 				}
 			}
 		case 'f':
-			// fetch API
 			if i+6 <= n && code[i:i+6] == "fetch(" && !found["fetch"] {
 				found["fetch"] = true
 				features = append(features, UnsupportedFeature{
 					Name:        "fetch",
-					Description: "the Fetch API requires Bun engine",
+					Description: featureDescriptions["fetch"],
 				})
 			}
 		case 'W':
-			// WebSocket
 			if i+9 <= n && code[i:i+9] == "WebSocket" && !found["websocket"] {
 				found["websocket"] = true
 				features = append(features, UnsupportedFeature{
 					Name:        "WebSocket",
-					Description: "WebSocket API requires Bun engine",
+					Description: featureDescriptions["websocket"],
 				})
 			}
 		case 'r':
-			// readFile (Bun file API)
 			if i+8 <= n && code[i:i+8] == "readFile" && !found["fileio"] {
 				found["fileio"] = true
 				features = append(features, UnsupportedFeature{
 					Name:        "File I/O",
-					Description: "file system operations (readFile/writeFile) require Bun engine",
+					Description: featureDescriptions["fileio"],
 				})
 			}
 		case 'w':
-			// writeFile (Bun file API)
 			if i+9 <= n && code[i:i+9] == "writeFile" && !found["fileio"] {
 				found["fileio"] = true
 				features = append(features, UnsupportedFeature{
 					Name:        "File I/O",
-					Description: "file system operations (readFile/writeFile) require Bun engine",
+					Description: featureDescriptions["fileio"],
 				})
 			}
 		case 's':
-			// setTimeout/setInterval (limited in GOJA)
-			if i+11 <= n && code[i:i+11] == "setTimeout(" && !found["timers"] {
-				found["timers"] = true
-				features = append(features, UnsupportedFeature{
-					Name:        "Timers",
-					Description: "setTimeout/setInterval require Bun engine for proper async behavior",
-				})
-			}
-			if i+12 <= n && code[i:i+12] == "setInterval(" && !found["timers"] {
-				found["timers"] = true
-				features = append(features, UnsupportedFeature{
-					Name:        "Timers",
-					Description: "setTimeout/setInterval require Bun engine for proper async behavior",
-				})
+			if !found["timers"] {
+				if i+11 <= n && code[i:i+11] == "setTimeout(" {
+					found["timers"] = true
+					features = append(features, UnsupportedFeature{
+						Name:        "Timers",
+						Description: featureDescriptions["timers"],
+					})
+				} else if i+12 <= n && code[i:i+12] == "setInterval(" {
+					found["timers"] = true
+					features = append(features, UnsupportedFeature{
+						Name:        "Timers",
+						Description: featureDescriptions["timers"],
+					})
+				}
 			}
 		}
 	}
 
 	return features
 }
+
+// ============================================================================
+// Error Formatting
+// ============================================================================
 
 // FormatUnsupportedFeaturesError creates a user-friendly error message for unsupported features.
 func FormatUnsupportedFeaturesError(features []UnsupportedFeature) string {
@@ -111,40 +115,40 @@ func FormatUnsupportedFeaturesError(features []UnsupportedFeature) string {
 		sb.WriteString(f.Name)
 		sb.WriteString(": ")
 		sb.WriteString(f.Description)
-		sb.WriteString("\n")
+		sb.WriteByte('\n')
 	}
 	sb.WriteString("\nSolution: Use Bun engine by setting Engine: tsgo.EngineBun in your config, or select 'Bun' in Monaco.")
 	return sb.String()
 }
 
+// ============================================================================
+// Top-Level Await Detection
+// ============================================================================
+
 // ContainsTopLevelAwait checks if code has top-level await (await outside async function).
 // This is a simple heuristic check for common patterns.
 func ContainsTopLevelAwait(code string) bool {
-	// Look for "await " at the start of a line or after common statement starters
-	// This catches: `await fetch()`, `const x = await ...`, `export default await ...`
 	n := len(code)
 	for i := 0; i < n-6; i++ {
-		if code[i:i+6] == "await " {
-			// Check if this await is at top level (not inside async function)
-			// Simple heuristic: if we see "async " before this await on the same "block level",
-			// it's likely inside an async function. Otherwise, it's top-level.
-			// For accuracy, check if await appears after "export default" pattern
-			if i >= 15 && code[i-15:i] == "export default " {
-				return true
+		if code[i:i+6] != "await " {
+			continue
+		}
+
+		// Check for "export default await" pattern
+		if i >= 15 && code[i-15:i] == "export default " {
+			return true
+		}
+
+		// Check for assignment patterns like "const x = await"
+		if i >= 2 && code[i-2:i] == "= " {
+			// Verify not inside async function by checking nearby prefix
+			start := i - 100
+			if start < 0 {
+				start = 0
 			}
-			// Check for assignment patterns like "const x = await" or "let x = await"
-			if i >= 2 && code[i-2:i] == "= " {
-				// Could be top-level, but need to verify not inside async function
-				// Check backwards for "async function" or "async ("
-				start := i - 100
-				if start < 0 {
-					start = 0
-				}
-				prefix := code[start:i]
-				// If no "async " in the nearby prefix, likely top-level
-				if !strings.Contains(prefix, "async ") {
-					return true
-				}
+			prefix := code[start:i]
+			if !strings.Contains(prefix, "async ") {
+				return true
 			}
 		}
 	}

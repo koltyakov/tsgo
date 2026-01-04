@@ -1,4 +1,8 @@
 // Package typegen generates TypeScript type definitions from Go types.
+//
+// This package enables automatic generation of .d.ts files for Go values
+// that are injected as globals into TypeScript execution context. This
+// provides full editor autocomplete and type checking support.
 package typegen
 
 import (
@@ -7,6 +11,10 @@ import (
 	"sort"
 	"strings"
 )
+
+// ============================================================================
+// Context Type Generation
+// ============================================================================
 
 // GenerateContextDTS generates TypeScript declarations for global context values.
 func GenerateContextDTS(globals map[string]any) string {
@@ -31,6 +39,10 @@ func GenerateContextDTS(globals map[string]any) string {
 
 	return sb.String()
 }
+
+// ============================================================================
+// Go to TypeScript Type Conversion
+// ============================================================================
 
 // goToTSType converts a Go value to its TypeScript type representation.
 func goToTSType(value any) string {
@@ -69,6 +81,10 @@ func reflectToTS(t reflect.Type) string {
 		return "any"
 	}
 }
+
+// ============================================================================
+// TypeScript Definition Builder
+// ============================================================================
 
 // Builder builds TypeScript type definitions incrementally.
 type Builder struct {

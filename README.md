@@ -54,24 +54,28 @@ flowchart TB
 
 ```typescript
 // Platform provides: order, customer, config (with full types)
-const totalValue = order.items.reduce((sum, item) => sum + item.price * item.quantity, 0);
-const isVIP = customer.tier === 'platinum' || customer.totalSpent > 100000;
+const totalValue = order.items.reduce(
+  (sum, item) => sum + item.price * item.quantity,
+  0
+);
+const isVIP = customer.tier === "platinum" || customer.totalSpent > 100000;
 
 // Business logic in TypeScript
 const needsApproval = totalValue > config.approvalThreshold && !isVIP;
-const priority = isVIP ? 'high' : totalValue > 10000 ? 'medium' : 'normal';
+const priority = isVIP ? "high" : totalValue > 10000 ? "medium" : "normal";
 
 export default {
-  route: needsApproval ? 'approval-workflow' : 'fulfillment',
+  route: needsApproval ? "approval-workflow" : "fulfillment",
   priority,
   flags: {
     vipCustomer: isVIP,
     largeOrder: totalValue > 10000,
-  }
+  },
 };
 ```
 
 **Generated Contract:**
+
 ```typescript
 export type Result = {
   route: string;
@@ -138,17 +142,17 @@ func main() {
   if err != nil {
     panic(err)
   }
-  
+
   fmt.Println(result.Value) // "Hello, User 42"
 }
 ```
 
 ## Engines
 
-| Engine | Pure Go | TypeScript | Async/Await | Best For |
-|--------|---------|------------|-------------|----------|
-| GOJA   | ✅      | via esbuild| ❌          | High concurrency, simple expressions, pure Go deployments |
-| Bun    | ❌      | Native     | ✅          | CPU-intensive work, async operations, complex TypeScript |
+| Engine | Pure Go | TypeScript  | Async/Await | Best For                                                  |
+| ------ | ------- | ----------- | ----------- | --------------------------------------------------------- |
+| GOJA   | ✅      | via esbuild | ❌          | High concurrency, simple expressions, pure Go deployments |
+| Bun    | ❌      | Native      | ✅          | CPU-intensive work, async operations, complex TypeScript  |
 
 ### Engine Selection Guide
 
@@ -242,10 +246,10 @@ result, _ := executor.Execute(ctx, `
 
 **Two approaches:**
 
-| Approach | TSCode | GoFunc | Use Case |
-|----------|--------|--------|----------|
-| **TSCode only** | ✅ Required | ❌ Omit | Simple functions, no duplication |
-| **TSCode + GoFunc** | ✅ Required | ✅ Optional | Performance-critical GOJA code |
+| Approach            | TSCode      | GoFunc      | Use Case                         |
+| ------------------- | ----------- | ----------- | -------------------------------- |
+| **TSCode only**     | ✅ Required | ❌ Omit     | Simple functions, no duplication |
+| **TSCode + GoFunc** | ✅ Required | ✅ Optional | Performance-critical GOJA code   |
 
 For type-aware IntelliSense in Monaco, add function declarations to the type builder:
 
@@ -264,7 +268,7 @@ tsgo provides **strong context isolation** between executions, making it safe fo
 ### Isolation Guarantees
 
 - **No Global State Leakage**: Variables set on `globalThis` in one execution are NOT visible to subsequent executions
-- **Injected Globals Cleaned**: Globals passed via `WithGlobals()` are removed after each execution  
+- **Injected Globals Cleaned**: Globals passed via `WithGlobals()` are removed after each execution
 - **Function Pollution Prevented**: Functions defined on `globalThis` are cleaned up
 - **Warm Pool with Fresh Context**: Runtime pools are kept warm for performance while ensuring each execution gets a clean slate
 
@@ -290,11 +294,13 @@ result, _ := executor.Execute(ctx, `typeof globalThis.processASecret`)
 ### How It Works
 
 **GOJA Engine:**
+
 - Tracks all globals set during execution (both injected and script-created)
 - On release, scans `globalThis` and removes any properties not present in the base runtime
 - Base runtime includes only safe defaults: `console`, `Object`, `Array`, `Math`, etc.
 
 **Bun Engine:**
+
 - Each execution creates a fresh `Function` scope
 - Context is injected as local variables, not global state
 - Process pool reuses worker processes, but execution contexts are isolated
@@ -311,14 +317,14 @@ The most explicit and recommended way to return a result:
 
 ```typescript
 // Object export
-export default { status: 'success', count: 42 };
+export default { status: "success", count: 42 };
 
 // Variable export
 const result = computeValue();
 export default result;
 
 // Inline expression
-export default items.filter(x => x.active).length;
+export default items.filter((x) => x.active).length;
 ```
 
 ### 2. `export default function` / `async function`
@@ -327,7 +333,7 @@ When the default export is a function, tsgo automatically invokes it and returns
 
 ```typescript
 // Sync function - called automatically, returns "hello"
-export default function() {
+export default function () {
   return "hello";
 }
 
@@ -351,28 +357,27 @@ For simple scripts without exports, the last expression's value is returned:
 // Simple expression - returns 15
 const x = 10;
 const y = 5;
-x + y
+x + y;
 
 // Comparison - returns true
 const a = 5;
 const b = 3;
-a > b
+a > b;
 
 // Object literal - returns the object
 const name = "test";
-({ name, timestamp: Date.now() })
+({ name, timestamp: Date.now() });
 ```
 
 > **Note:** The last expression must be a valid JavaScript expression (not a statement). Wrapping object literals in parentheses `({...})` ensures they're treated as expressions.
 
 ### Priority Summary
 
-| Pattern | Priority | Use Case |
-|---------|----------|----------|
-| `export default value` | 1st | Explicit static values |
-| `export default fn()` | 1st | Functions auto-invoked |
-| Last expression | 2nd | Quick scripts, REPL-style |
-
+| Pattern                | Priority | Use Case                  |
+| ---------------------- | -------- | ------------------------- |
+| `export default value` | 1st      | Explicit static values    |
+| `export default fn()`  | 1st      | Functions auto-invoked    |
+| Last expression        | 2nd      | Quick scripts, REPL-style |
 
 ## Contract Generation
 
@@ -413,11 +418,13 @@ contractJSON, _ := contract.ToJSON()
 ```
 
 The `Contract` struct includes:
+
 - **Name** - Contract identifier (usually "Result")
 - **Type** - Full type definition tree (object, array, union, primitives)
 - **Inputs** - Declared global variables the script expects (`declare const ...`)
 
 Output methods:
+
 - `ToTypeScript()` - Returns `.d.ts` compatible type definitions
 - `ToJSONSchema()` - Returns `*JSONSchema` struct
 - `ToJSONSchemaJSON()` - Returns JSON Schema 2020-12 as `[]byte`
@@ -433,7 +440,7 @@ package main
 import (
   "log"
   "net/http"
-  
+
   "github.com/koltyakov/tsgo"
 )
 
@@ -457,18 +464,19 @@ func main() {
   builder.AddGlobal("currentUser", "User")
   builder.AddGlobal("config", "Config")
   builder.AddFunction("sum", "x: number, y: number", "number", "Adds two numbers")
-  
+
   // Apply types to handler (broadcasts to connected clients)
   handler.SetTypes(builder)
 
   // Handler serves: /ws (WebSocket), /types (GET), /client.js
   http.Handle("/api/", handler)
-  
+
   log.Fatal(http.ListenAndServe(":8080", nil))
 }
 ```
 
 The handler provides:
+
 - `/ws` - WebSocket endpoint for real-time type updates
 - `/types` - GET endpoint returning current `.d.ts` definitions
 - `/client.js` - Client-side integration script
@@ -508,7 +516,7 @@ interface User {
   id: number;
   name: string;
   email: string;
-  role: 'admin' | 'user' | 'guest';
+  role: "admin" | "user" | "guest";
 }
 
 interface Config {

@@ -1,4 +1,11 @@
 // Package sourcemap provides source map parsing and error mapping.
+//
+// Source maps allow mapping transpiled JavaScript locations back to the
+// original TypeScript source. This is essential for providing meaningful
+// error messages when runtime errors occur in transpiled code.
+//
+// The package implements VLQ (Variable-Length Quantity) decoding for
+// efficient parsing of source map mappings strings.
 package sourcemap
 
 import (
@@ -6,6 +13,10 @@ import (
 	"encoding/json"
 	"fmt"
 )
+
+// ============================================================================
+// VLQ Decoding Lookup Table
+// ============================================================================
 
 // base64Lookup is a pre-computed lookup table for base64 character to index conversion.
 var base64Lookup = func() [256]int8 {
@@ -19,6 +30,10 @@ var base64Lookup = func() [256]int8 {
 	}
 	return table
 }()
+
+// ============================================================================
+// Types
+// ============================================================================
 
 // SourceMap represents a parsed source map.
 type SourceMap struct {
@@ -39,6 +54,10 @@ type Mapping struct {
 	NameIndex       int
 }
 
+// ============================================================================
+// Parsing
+// ============================================================================
+
 // Parse parses a source map from JSON bytes.
 func Parse(data []byte) (*SourceMap, error) {
 	var sm SourceMap
@@ -56,6 +75,10 @@ func ParseBase64(encoded string) (*SourceMap, error) {
 	}
 	return Parse(decoded)
 }
+
+// ============================================================================
+// Location Mapping
+// ============================================================================
 
 // MapLocation maps a generated location to original source location.
 func MapLocation(sm *SourceMap, line, column int) (originalLine, originalColumn int, source string) {
@@ -88,6 +111,10 @@ func FormatError(msg string, source string, line, column int, snippet string) st
 	}
 	return result
 }
+
+// ============================================================================
+// VLQ Decoding
+// ============================================================================
 
 // decodeMappings decodes VLQ-encoded mappings string.
 // Pre-allocates slice capacity based on estimated mapping count.

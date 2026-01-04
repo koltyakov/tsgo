@@ -1,4 +1,8 @@
 // Package monaco provides Monaco editor integration for live TypeScript editing.
+//
+// This package enables real-time type definition updates in Monaco editors
+// through WebSocket connections. It broadcasts TypeScript declarations to
+// connected clients for immediate autocomplete and type checking support.
 package monaco
 
 import (
@@ -11,6 +15,10 @@ import (
 	"github.com/gorilla/websocket"
 	"github.com/koltyakov/tsgo/internal/typegen"
 )
+
+// ============================================================================
+// Configuration
+// ============================================================================
 
 // Config configures Monaco integration.
 type Config struct {
@@ -29,6 +37,10 @@ func DefaultConfig() Config {
 		WriteTimeout: 10 * time.Second,
 	}
 }
+
+// ============================================================================
+// WebSocket Handler
+// ============================================================================
 
 // Handler provides WebSocket-based Monaco integration.
 type Handler struct {
@@ -141,6 +153,10 @@ func (h *Handler) broadcastTypes() {
 	}
 }
 
+// ============================================================================
+// Client Script
+// ============================================================================
+
 // ClientScript returns JavaScript for Monaco integration.
 func ClientScript() string {
 	return `(function() {
@@ -166,6 +182,10 @@ func ClientScript() string {
   };
 })();`
 }
+
+// ============================================================================
+// Server
+// ============================================================================
 
 // Serve starts the Monaco integration server.
 func Serve(cfg Config) error {

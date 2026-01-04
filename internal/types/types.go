@@ -1,9 +1,19 @@
 // Package types defines core types for the tsgo TypeScript executor.
+//
+// This package contains the fundamental types used throughout tsgo:
+//   - Engine types and configuration
+//   - Execution results and errors
+//   - Security policies
+//   - Function definitions for injection
 package types
 
 import (
 	"time"
 )
+
+// ============================================================================
+// Engine Types
+// ============================================================================
 
 // EngineType represents the execution engine to use.
 type EngineType int
@@ -17,6 +27,7 @@ const (
 	EngineBun
 )
 
+// String returns the string representation of the engine type.
 func (e EngineType) String() string {
 	switch e {
 	case EngineAuto:
@@ -30,6 +41,10 @@ func (e EngineType) String() string {
 	}
 }
 
+// ============================================================================
+// Duration Wrapper
+// ============================================================================
+
 // Duration wraps time.Duration for config purposes.
 type Duration time.Duration
 
@@ -37,6 +52,10 @@ type Duration time.Duration
 func (d Duration) Duration() time.Duration {
 	return time.Duration(d)
 }
+
+// ============================================================================
+// Security
+// ============================================================================
 
 // SecurityPolicy defines the security constraints for script execution.
 type SecurityPolicy struct {
@@ -52,15 +71,24 @@ type SecurityPolicy struct {
 	MaxExecutionTime time.Duration
 }
 
+// Default security policy values.
+const (
+	DefaultMaxExecutionTime = 30 * time.Second
+)
+
 // DefaultSecurityPolicy returns a restrictive default security policy.
 func DefaultSecurityPolicy() SecurityPolicy {
 	return SecurityPolicy{
 		NetworkAccess:    false,
 		DiskAccess:       false,
 		AllowedPaths:     nil,
-		MaxExecutionTime: 30 * time.Second,
+		MaxExecutionTime: DefaultMaxExecutionTime,
 	}
 }
+
+// ============================================================================
+// Function Injection
+// ============================================================================
 
 // FunctionDef defines a function that can be injected into the script execution context.
 //
@@ -96,6 +124,16 @@ type FunctionDef struct {
 	GoFunc any
 }
 
+// ============================================================================
+// Configuration
+// ============================================================================
+
+// Default configuration values.
+const (
+	DefaultTimeout     = 30 * time.Second
+	DefaultMemoryLimit = 64 * 1024 * 1024 // 64MB
+)
+
 // ExecutorConfig configures the TypeScript executor.
 type ExecutorConfig struct {
 	// Engine specifies which engine to use (EngineAuto for automatic selection).
@@ -121,8 +159,8 @@ type ExecutorConfig struct {
 func DefaultConfig() ExecutorConfig {
 	return ExecutorConfig{
 		Engine:      EngineAuto,
-		Timeout:     Duration(30 * time.Second),
-		MemoryLimit: 64 * 1024 * 1024, // 64MB
+		Timeout:     Duration(DefaultTimeout),
+		MemoryLimit: DefaultMemoryLimit,
 		SourceMaps:  true,
 		PoolSize:    0, // 0 means use default based on CPU count
 	}
@@ -142,6 +180,10 @@ func (c *ExecutorConfig) Validate() error {
 	return nil
 }
 
+// ============================================================================
+// Execution Results
+// ============================================================================
+
 // Result represents the result of a script execution.
 type Result struct {
 	// Value is the return value from script execution.
@@ -153,6 +195,22 @@ type Result struct {
 	// EngineUsed indicates which engine executed the script.
 	EngineUsed EngineType
 }
+
+// ExecutionMetrics contains performance metrics for an execution.
+type ExecutionMetrics struct {
+	// TranspileTime is the time spent transpiling TypeScript to JavaScript.
+	TranspileTime time.Duration
+	// ExecutionTime is the time spent executing the JavaScript.
+	ExecutionTime time.Duration
+	// TotalTime is the total time from start to finish.
+	TotalTime time.Duration
+	// CacheHit indicates if the transpiled code was served from cache.
+	CacheHit bool
+}
+
+// ============================================================================
+// Errors
+// ============================================================================
 
 // ExecutionError represents an error during script execution.
 type ExecutionError struct {
@@ -180,16 +238,4 @@ func (e *ExecutionError) Error() string {
 // Unwrap returns the underlying cause for error chain support.
 func (e *ExecutionError) Unwrap() error {
 	return e.Cause
-}
-
-// ExecutionMetrics contains performance metrics for an execution.
-type ExecutionMetrics struct {
-	// TranspileTime is the time spent transpiling TypeScript to JavaScript.
-	TranspileTime time.Duration
-	// ExecutionTime is the time spent executing the JavaScript.
-	ExecutionTime time.Duration
-	// TotalTime is the total time from start to finish.
-	TotalTime time.Duration
-	// CacheHit indicates if the transpiled code was served from cache.
-	CacheHit bool
 }

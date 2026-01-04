@@ -1,4 +1,8 @@
 // Package transpiler provides TypeScript to JavaScript transpilation with caching.
+//
+// The transpiler uses esbuild for fast TypeScript to JavaScript conversion,
+// with an LRU cache to avoid re-transpiling the same code. It supports both
+// IIFE format (for general execution) and ESM format (for top-level await).
 package transpiler
 
 import (
@@ -10,14 +14,22 @@ import (
 	"github.com/evanw/esbuild/pkg/api"
 )
 
+// ============================================================================
+// Configuration
+// ============================================================================
+
+// DefaultCacheSize is the default number of transpiled scripts to cache.
+const DefaultCacheSize = 1000
+
+// ============================================================================
+// Transpiler
+// ============================================================================
+
 // Transpiler transpiles TypeScript to JavaScript with caching.
 type Transpiler struct {
 	cache     *lruCache
 	cacheSize int
 }
-
-// DefaultCacheSize is the default number of transpiled scripts to cache.
-const DefaultCacheSize = 1000
 
 // New creates a new TypeScript transpiler.
 func New() *Transpiler {
@@ -154,6 +166,10 @@ func (t *Transpiler) ClearCache() {
 	t.cache = newLRUCache(t.cacheSize)
 }
 
+// ============================================================================
+// Internal Types
+// ============================================================================
+
 type transpileResult struct {
 	code      string
 	sourceMap string
@@ -169,6 +185,10 @@ type TranspileError struct {
 func (e *TranspileError) Error() string {
 	return e.Message
 }
+
+// ============================================================================
+// Hashing & Source Map Extraction
+// ============================================================================
 
 // hashCode computes a fast FNV-1a hash of the code.
 // FNV-1a is much faster than SHA-256 and sufficient for cache keys.
@@ -193,6 +213,10 @@ func extractInlineSourceMap(code string) string {
 	}
 	return strings.TrimSpace(result)
 }
+
+// ============================================================================
+// Expression Preprocessing
+// ============================================================================
 
 // preprocessTrailingExpression converts trailing expressions to export default.
 // This ensures expressions like "1 === 2" or "a && b" return their value.
@@ -382,6 +406,10 @@ func isDeclaration(stmt string) bool {
 	}
 	return false
 }
+
+// ============================================================================
+// LRU Cache Implementation
+// ============================================================================
 
 // lruCache is a simple LRU cache implementation.
 // Uses RWMutex for better read concurrency since cache hits are common.
