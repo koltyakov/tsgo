@@ -4,7 +4,7 @@ TypeScript execution library for Go for user-defined business logic embedding.
 
 ## Use Case: User-Defined Business Logic
 
-tsgo enables **platforms** built in Go to safely execute **user-defined TypeScript** for customizable business logic — workflow conditions, automation handlers, data transformations, and more.
+tsgo enables **platforms** built in Go to safely execute **user-defined TypeScript** for customizable business logic - workflow conditions, automation handlers, data transformations, and more.
 
 ```mermaid
 flowchart TB
@@ -44,11 +44,11 @@ flowchart TB
 
 ### How It Works
 
-1. **Platform defines context** — The Go backend registers typed globals (e.g., `order: Order`, `user: User`) and interfaces that scripts can use
-2. **User writes logic** — In the Monaco editor with full IntelliSense, autocomplete, and type checking powered by the platform's type definitions
-3. **Contract extraction** — As the user types, the system analyzes the script and generates a contract (TypeScript types + JSON Schema) for the return value
-4. **Output mapping** — The user maps the script's output to business objects (e.g., "route to → approval workflow", "set priority → field")
-5. **Runtime execution** — When triggered, the Go backend executes the script with real data, returning typed, validated results
+1. **Platform defines context** - The Go backend registers typed globals (e.g., `order: Order`, `user: User`) and interfaces that scripts can use
+2. **User writes logic** - In the Monaco editor with full IntelliSense, autocomplete, and type checking powered by the platform's type definitions
+3. **Contract extraction** - As the user types, the system analyzes the script and generates a contract (TypeScript types + JSON Schema) for the return value
+4. **Output mapping** - The user maps the script's output to business objects (e.g., "route to → approval workflow", "set priority → field")
+5. **Runtime execution** - When triggered, the Go backend executes the script with real data, returning typed, validated results
 
 ### Example: Order Routing Handler
 
@@ -80,24 +80,27 @@ export type Result = {
 };
 ```
 
-The platform can then map `route` to a workflow selector, `priority` to a queue, and `flags` to audit fields — all with type safety and validation.
+The platform can then map `route` to a workflow selector, `priority` to a queue, and `flags` to audit fields - all with type safety and validation.
 
 ### Benefits
 
-- **Type Safety** — Full TypeScript with platform-defined types eliminates runtime surprises
-- **Great UX** — Monaco editor with IntelliSense gives users IDE-quality editing
-- **Contract-Driven** — Output schemas enable visual mapping and validation before deployment
-- **Secure Execution** — Sandboxed runtime with controlled globals, no file/network access
-- **Pure Go Option** — GOJA engine requires no external dependencies for simple scripts
+- **Type Safety** - Full TypeScript with platform-defined types eliminates runtime surprises
+- **Great UX** - Monaco editor with IntelliSense gives users IDE-quality editing
+- **Contract-Driven** - Output schemas enable visual mapping and validation before deployment
+- **Secure Execution** - Sandboxed runtime with controlled globals, no file/network access
+- **Pure Go Option** - GOJA engine requires no external prerequisites for simple scripts
 
 ## Features
 
-- **Multiple Execution Engines**: GOJA (pure Go), Bun (requires installation)
+- **Multiple Execution Engines**: GOJA (pure Go, zero prerequisites) and Bun (async/await, native TypeScript)
 - **TypeScript Support**: Full TypeScript transpilation via esbuild
-- **Automatic Engine Selection**: Chooses the best engine based on code analysis
-- **Security Sandboxing**: Restrict globals, file access, and network operations
+- **Automatic Engine Selection**: Analyzes code for async/await, fetch, etc. and routes to the appropriate engine
+- **Security Sandboxing**: Validate code against restricted globals before execution
 - **Monaco Integration**: Live TypeScript types for Monaco editor
-- **Source Map Support**: Error traces mapped to original TypeScript
+- **Contract Generation**: Extract TypeScript types and JSON Schema from script exports
+- **Source Map Support**: Error traces mapped back to original TypeScript line numbers
+- **Execution Isolation**: Each execution gets a clean context-no state leakage between runs
+- **Pooled Execution**: Pre-warmed runtime pools for both engines minimize latency
 
 ## Installation
 
@@ -142,10 +145,10 @@ func main() {
 
 ## Engines
 
-| Engine | Pure Go | TypeScript | Async | Network |
-|--------|---------|------------|-------|---------|
-| GOJA   | ✅      | via esbuild| ❌    | ❌      |
-| Bun    | ❌      | Native     | ✅    | ✅      |
+| Engine | Pure Go | TypeScript | Async/Await | Best For |
+|--------|---------|------------|-------------|----------|
+| GOJA   | ✅      | via esbuild| ❌          | High concurrency, simple expressions, pure Go deployments |
+| Bun    | ❌      | Native     | ✅          | CPU-intensive work, async operations, complex TypeScript |
 
 ### Engine Selection Guide
 
@@ -181,18 +184,27 @@ See the [Benchmark Suite](internal/benchmark/README.md) for detailed comparison,
 ## Configuration Options
 
 ```go
-tsgo.New(
-  tsgo.WithEngine(tsgo.EngineGOJA),      // Engine selection
+executor := tsgo.New(
+  tsgo.WithEngine(tsgo.EngineGOJA),      // Engine: EngineAuto (default), EngineGOJA, EngineBun
   tsgo.WithTimeout(10*time.Second),      // Execution timeout
-  tsgo.WithMemoryLimit(64*1024*1024),    // Memory limit (64MB)
-  tsgo.WithGlobals(map[string]any{...}), // Global variables
-  tsgo.WithFunctions(map[string]tsgo.FunctionDef{...}), // Helper functions
-  tsgo.WithSecurity(tsgo.SecurityPolicy{
-    RestrictedGlobals: []string{"eval", "Function"},
+  tsgo.WithMemoryLimit(64*1024*1024),    // Memory limit in bytes (64MB)
+  tsgo.WithGlobals(map[string]any{       // Global variables available to scripts
+    "userId": 123,
+    "config": map[string]any{"debug": true},
   }),
-  tsgo.WithSourceMaps(true),             // Enable source maps
-  tsgo.WithPoolSize(4),                  // Worker pool size
+  tsgo.WithFunctions(map[string]tsgo.FunctionDef{  // Callable functions
+    "sum": {
+      GoFunc: func(a, b float64) float64 { return a + b },
+      TSCode: "function sum(a, b) { return a + b; }",
+    },
+  }),
+  tsgo.WithSecurity(tsgo.SecurityPolicy{
+    RestrictedGlobals: []string{"eval", "Function"},  // Block dangerous globals
+  }),
+  tsgo.WithSourceMaps(true),             // Enable source map generation for error traces
+  tsgo.WithPoolSize(4),                  // Worker pool size (default: NumCPU)
 )
+defer executor.Close()  // Always close to release resources
 ```
 
 ### Injecting Functions
@@ -266,7 +278,7 @@ result, _ := executor.Execute(ctx, `typeof globalThis.processASecret`)
 - Context is injected as local variables, not global state
 - Process pool reuses worker processes, but execution contexts are isolated
 
-This design allows high-performance pooled execution while maintaining strict isolation—critical for workflow engines, multi-tenant SaaS, and security-sensitive applications.
+This design allows high-performance pooled execution while maintaining strict isolation-critical for workflow engines, multi-tenant SaaS, and security-sensitive applications.
 
 ## Script Results Interpretation
 
@@ -293,15 +305,15 @@ export default items.filter(x => x.active).length;
 When the default export is a function, tsgo automatically invokes it and returns the result:
 
 ```typescript
-// Sync function — called automatically, returns "hello"
+// Sync function - called automatically, returns "hello"
 export default function() {
   return "hello";
 }
 
-// Arrow function — also called automatically
+// Arrow function - also called automatically
 export default () => ({ computed: true, value: 123 });
 
-// Async function — requires Bun engine (GOJA will error)
+// Async function - requires Bun engine (GOJA will error)
 export default async (): Promise<string> => {
   const data = await fetchData();
   return data.result;
@@ -315,17 +327,17 @@ export default async (): Promise<string> => {
 For simple scripts without exports, the last expression's value is returned:
 
 ```typescript
-// Simple expression — returns 15
+// Simple expression - returns 15
 const x = 10;
 const y = 5;
 x + y
 
-// Comparison — returns true
+// Comparison - returns true
 const a = 5;
 const b = 3;
 a > b
 
-// Object literal — returns the object
+// Object literal - returns the object
 const name = "test";
 ({ name, timestamp: Date.now() })
 ```
@@ -343,7 +355,7 @@ const name = "test";
 
 ## Contract Generation
 
-Extract TypeScript type definitions and JSON Schema from scripts for mapping, validation, or form generation:
+Extract TypeScript type definitions and JSON Schema from scripts for validation, form generation, or API documentation:
 
 ```go
 code := `
@@ -365,108 +377,156 @@ if err != nil {
 // Generate TypeScript type definition
 ts := contract.ToTypeScript()
 // Output:
-// export type Result = { id: number; name: string; email?: string };
+// export type Result = {
+//   id: number;
+//   name: string;
+//   email?: string;
+// };
 
 // Generate JSON Schema for validation/forms
-schema := contract.ToJSONSchema()
 jsonSchema, _ := contract.ToJSONSchemaJSON()
 // Output: JSON Schema 2020-12 with properties, types, required fields
 
-// Get contract as JSON for external systems
+// Get full contract as JSON for external systems
 contractJSON, _ := contract.ToJSON()
 ```
 
-The contract includes:
-- **Type** - Full type definition of the default export (object, array, union, primitives)
+The `Contract` struct includes:
+- **Name** - Contract identifier (usually "Result")
+- **Type** - Full type definition tree (object, array, union, primitives)
 - **Inputs** - Declared global variables the script expects (`declare const ...`)
-- **TypeScript** - Generated `.d.ts` compatible type definitions
-- **JSON Schema** - Schema for validation, form builders, or API documentation
+
+Output methods:
+- `ToTypeScript()` - Returns `.d.ts` compatible type definitions
+- `ToJSONSchema()` - Returns `*JSONSchema` struct
+- `ToJSONSchemaJSON()` - Returns JSON Schema 2020-12 as `[]byte`
+- `ToJSON()` - Returns full contract as JSON `[]byte`
 
 ## Monaco Integration
 
+The Monaco handler provides WebSocket-based integration for live TypeScript type updates:
+
 ```go
-handler := tsgo.NewMonacoHandler()
+package main
 
-builder := tsgo.NewTypeBuilder()
-builder.AddInterface("User", map[string]string{
-  "id":   "number",
-  "name": "string",
-})
-builder.AddGlobal("currentUser", "User")
+import (
+  "log"
+  "net/http"
+  
+  "github.com/koltyakov/tsgo"
+)
 
-handler.SetTypes(builder)
+func main() {
+  // Create Monaco handler for WebSocket communication
+  handler := tsgo.NewMonacoHandler()
 
-http.Handle("/", handler)
-http.ListenAndServe(":8080", nil)
+  // Build TypeScript type definitions
+  builder := tsgo.NewTypeBuilder()
+  builder.AddInterface("User", map[string]string{
+    "id":    "number",
+    "name":  "string",
+    "email": "string",
+    "role":  "'admin' | 'user' | 'guest'",
+  })
+  builder.AddInterface("Config", map[string]string{
+    "apiUrl":  "string",
+    "timeout": "number",
+    "debug":   "boolean",
+  })
+  builder.AddGlobal("currentUser", "User")
+  builder.AddGlobal("config", "Config")
+  builder.AddFunction("sum", "x: number, y: number", "number", "Adds two numbers")
+  
+  // Apply types to handler (broadcasts to connected clients)
+  handler.SetTypes(builder)
+
+  // Handler serves: /ws (WebSocket), /types (GET), /client.js
+  http.Handle("/api/", handler)
+  
+  log.Fatal(http.ListenAndServe(":8080", nil))
+}
 ```
+
+The handler provides:
+- `/ws` - WebSocket endpoint for real-time type updates
+- `/types` - GET endpoint returning current `.d.ts` definitions
+- `/client.js` - Client-side integration script
 
 ## Monaco Playground Demo
 
 The project includes a fully-featured Monaco editor playground for testing TypeScript execution:
 
 ```bash
-# Run the playground
+# Run the playground (opens http://localhost:8080)
 make monaco
 
 # Or directly with Go
 go run ./cmd/monaco
 ```
 
-Then open http://localhost:8080 in your browser.
-
 ![Monaco Demo](./assets/monaco-demo.jpg)
 
 ### Features
 
 - **Live TypeScript editing** with full IntelliSense and autocomplete
-- **Engine selection** — Auto (recommended), GOJA, or Bun
-- **Real-time contract generation** — see TypeScript types and JSON Schema as you type
-- **GOJA compatibility warnings** — errors shown when using unsupported features (async/await, fetch, etc.)
-- **Persistent code** — your code is saved to localStorage automatically
-- **Keyboard shortcut** — Press `⌘+Enter` (Mac) or `Ctrl+Enter` (Windows/Linux) to run
+- **Engine selection** - Auto (recommended), GOJA, or Bun
+- **Real-time contract generation** - see TypeScript types and JSON Schema as you type
+- **Sample code library** - multiple examples demonstrating different use cases
+- **Context-aware execution** - each sample has its own type definitions and globals
+- **GOJA compatibility warnings** - errors shown when using unsupported features (async/await, fetch, etc.)
+- **Persistent code** - your code is saved to localStorage automatically
+- **Keyboard shortcut** - Press `⌘+Enter` (Mac) or `Ctrl+Enter` (Windows/Linux) to run
 
-### Injected Globals
+### Sample-Provided Context
 
-The demo provides typed globals you can use in your scripts:
-
-```typescript
-// Available globals with full type support
-const user: User = currentUser;  // { id, name, email, role }
-const cfg: Config = config;      // { apiUrl, timeout, debug }
-```
-
-### Injected Functions
-
-The demo also provides helper functions that work in both GOJA and Bun:
+Each sample in the demo provides its own typed context. For example, the "Basic Types" sample provides:
 
 ```typescript
-// Available functions with full type support
-const total = sum(10, 20);       // 30
-const product = multiply(5, 6);  // 30
+// Types defined in context
+interface User {
+  id: number;
+  name: string;
+  email: string;
+  role: 'admin' | 'user' | 'guest';
+}
+
+interface Config {
+  apiUrl: string;
+  timeout: number;
+  debug: boolean;
+}
+
+// Globals available in your script
+const currentUser: User;
+const config: Config;
+
+// Functions available
+function sum(x: number, y: number): number;
+function multiply(x: number, y: number): number;
 ```
 
 ## Project Structure
 
 ```
 github.com/koltyakov/tsgo
-├── tsgo.go                 # Public API and executor
+├── tsgo.go                 # Public API: Executor, Options, TypeBuilder
 ├── internal/
-│   ├── types/              # Core types and interfaces
-│   ├── engine/             # Execution engines
-│   │   ├── goja/           # GOJA engine (pure Go, sync only)
-│   │   └── bun/            # Bun engine (async, network capable)
-│   ├── transpiler/         # TypeScript → JavaScript (esbuild)
-│   ├── selector/           # Automatic engine selection
-│   ├── sandbox/            # Security sandboxing
-│   ├── sourcemap/          # Source map handling
-│   ├── typegen/            # Type definition generation
-│   ├── contract/           # Contract extraction & JSON Schema
-│   ├── monaco/             # Monaco editor integration
-│   └── benchmark/          # Performance benchmarks
+│   ├── types/              # Core types: EngineType, Result, Config, SecurityPolicy
+│   ├── engine/             # Execution engine interface
+│   │   ├── goja/           # GOJA engine: pure Go, sync only, pooled runtimes
+│   │   └── bun/            # Bun engine: external process pool, async support
+│   ├── transpiler/         # TypeScript → JavaScript via esbuild
+│   ├── selector/           # Automatic engine selection based on code analysis
+│   ├── sandbox/            # Security validation (restricted globals)
+│   ├── sourcemap/          # Source map parsing and error mapping
+│   ├── typegen/            # TypeScript type definition builder
+│   ├── contract/           # Contract extraction: TypeScript types + JSON Schema
+│   ├── monaco/             # Monaco editor WebSocket integration
+│   └── benchmark/          # Performance benchmarks and comparison tests
 └── cmd/
     ├── basic/              # Basic usage example
-    ├── monaco/             # Monaco playground demo
-    └── benchmark/          # Benchmark runner
+    ├── monaco/             # Monaco playground (make monaco)
+    └── benchmark/          # Statistical benchmark runner
 ```
 
 ## License

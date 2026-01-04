@@ -463,20 +463,7 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 			if p.processes[idx] == proc && atomic.LoadInt32(&proc.failures) >= 3 {
 				p.processes[idx] = nil
 				atomic.AddInt32(&p.activeCount, -1)
-				go func(oldProc *process, pidx int) {
-					oldProc.close()
-					newProc, err := p.startProcess()
-					if err == nil && !p.closed.Load() {
-						p.mu.Lock()
-						if !p.closed.Load() && p.processes[pidx] == nil {
-							p.processes[pidx] = newProc
-							atomic.AddInt32(&p.activeCount, 1)
-						} else {
-							newProc.close()
-						}
-						p.mu.Unlock()
-					}
-				}(proc, idx)
+				p.replaceProcessAsync(proc, idx, true)
 			}
 			p.mu.Unlock()
 			p.mu.RLock()
@@ -490,20 +477,7 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 			if p.processes[idx] == proc && p.needsRecycle(proc) {
 				p.processes[idx] = nil
 				atomic.AddInt32(&p.activeCount, -1)
-				go func(oldProc *process, pidx int) {
-					oldProc.close()
-					newProc, err := p.startProcess()
-					if err == nil && !p.closed.Load() {
-						p.mu.Lock()
-						if !p.closed.Load() && p.processes[pidx] == nil {
-							p.processes[pidx] = newProc
-							atomic.AddInt32(&p.activeCount, 1)
-						} else {
-							newProc.close()
-						}
-						p.mu.Unlock()
-					}
-				}(proc, idx)
+				p.replaceProcessAsync(proc, idx, true)
 			}
 			p.mu.Unlock()
 			p.mu.RLock()
@@ -552,6 +526,33 @@ func (p *pool) needsRecycle(proc *process) bool {
 		return true
 	}
 	return false
+}
+
+// replaceProcessAsync closes the old process and starts a new one asynchronously.
+// If restartAlways is false, respects minSize pool settings.
+func (p *pool) replaceProcessAsync(oldProc *process, idx int, restartAlways bool) {
+	go func() {
+		oldProc.close()
+		// Check restart policy
+		if !restartAlways && p.minSize > 0 && int(atomic.LoadInt32(&p.activeCount)) >= p.minSize {
+			return
+		}
+		newProc, err := p.startProcess()
+		if err != nil || p.closed.Load() {
+			if newProc != nil {
+				newProc.close()
+			}
+			return
+		}
+		p.mu.Lock()
+		defer p.mu.Unlock()
+		if !p.closed.Load() && p.processes[idx] == nil {
+			p.processes[idx] = newProc
+			atomic.AddInt32(&p.activeCount, 1)
+		} else {
+			newProc.close()
+		}
+	}()
 }
 
 // releaseQueueSlot releases a slot in the queue semaphore
@@ -632,23 +633,8 @@ func (p *pool) healthChecker(interval time.Duration) {
 					if p.processes[i] == proc {
 						p.processes[i] = nil
 						atomic.AddInt32(&p.activeCount, -1)
-						go func(oldProc *process, pidx int) {
-							oldProc.close()
-							// Only restart if above minimum pool size requirement
-							if int(atomic.LoadInt32(&p.activeCount)) < p.minSize || p.minSize == 0 {
-								newProc, err := p.startProcess()
-								if err == nil && !p.closed.Load() {
-									p.mu.Lock()
-									if !p.closed.Load() && p.processes[pidx] == nil {
-										p.processes[pidx] = newProc
-										atomic.AddInt32(&p.activeCount, 1)
-									} else {
-										newProc.close()
-									}
-									p.mu.Unlock()
-								}
-							}
-						}(proc, i)
+						// Respect minSize when restarting during health check
+						p.replaceProcessAsync(proc, i, false)
 					}
 					p.mu.Unlock()
 					continue
