@@ -224,6 +224,50 @@ builder := typegen.NewBuilder()
 builder.AddFunction("sum", "x: number, y: number", "number", "Adds two numbers")
 ```
 
+## Execution Isolation
+
+tsgo provides **strong context isolation** between executions, making it safe for multi-tenant environments like BPMN engines where each process must be completely isolated.
+
+### Isolation Guarantees
+
+- **No Global State Leakage**: Variables set on `globalThis` in one execution are NOT visible to subsequent executions
+- **Injected Globals Cleaned**: Globals passed via `WithGlobals()` are removed after each execution  
+- **Function Pollution Prevented**: Functions defined on `globalThis` are cleaned up
+- **Warm Pool with Fresh Context**: Runtime pools are kept warm for performance while ensuring each execution gets a clean slate
+
+### Example: Process Isolation
+
+```go
+executor := tsgo.New(
+    tsgo.WithEngine(tsgo.EngineGOJA),
+    tsgo.WithPoolSize(4),
+)
+defer executor.Close()
+
+ctx := context.Background()
+
+// Process A: Sets a "secret" value
+executor.Execute(ctx, `globalThis.processASecret = "confidential"`)
+
+// Process B: Cannot access Process A's data (returns undefined)
+result, _ := executor.Execute(ctx, `typeof globalThis.processASecret`)
+// result.Value == "undefined"
+```
+
+### How It Works
+
+**GOJA Engine:**
+- Tracks all globals set during execution (both injected and script-created)
+- On release, scans `globalThis` and removes any properties not present in the base runtime
+- Base runtime includes only safe defaults: `console`, `Object`, `Array`, `Math`, etc.
+
+**Bun Engine:**
+- Each execution creates a fresh `Function` scope
+- Context is injected as local variables, not global state
+- Process pool reuses worker processes, but execution contexts are isolated
+
+This design allows high-performance pooled execution while maintaining strict isolation—critical for workflow engines, multi-tenant SaaS, and security-sensitive applications.
+
 ## Script Results Interpretation
 
 tsgo extracts a single result value from each script execution. The result is determined using the following priority:

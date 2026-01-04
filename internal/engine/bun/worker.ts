@@ -51,6 +51,19 @@ function applySecurityPolicy(policy: SecurityPolicy): void {
   }
 }
 
+// Capture base globalThis keys at startup for isolation cleanup
+const baseGlobalKeys = new Set(Object.keys(globalThis));
+
+// Clean up any globals added during execution (context isolation)
+function cleanupGlobals(): void {
+  const currentKeys = Object.keys(globalThis);
+  for (const key of currentKeys) {
+    if (!baseGlobalKeys.has(key)) {
+      delete (globalThis as Record<string, unknown>)[key];
+    }
+  }
+}
+
 // Execute user code and extract default export
 async function executeCode(code: string, context: Record<string, unknown>): Promise<unknown> {
   // Check if code is already transpiled (IIFE format from esbuild with __tsgo_exports__)
@@ -163,14 +176,19 @@ async function handleRequest(request: RpcRequest): Promise<RpcResponse> {
           };
         }
         
-        const result = await executeCode(request.code, request.context || {});
-        const executionTimeMs = performance.now() - startTime;
-        
-        return {
-          id: request.id,
-          result,
-          metrics: { executionTimeMs }
-        };
+        try {
+          const result = await executeCode(request.code, request.context || {});
+          const executionTimeMs = performance.now() - startTime;
+          
+          return {
+            id: request.id,
+            result,
+            metrics: { executionTimeMs }
+          };
+        } finally {
+          // Clean up any globals added during execution (context isolation)
+          cleanupGlobals();
+        }
         
       case 'shutdown':
         setTimeout(() => process.exit(0), 100);
@@ -220,13 +238,17 @@ async function main(): Promise<void> {
       if (line.trim()) {
         try {
           const request = JSON.parse(line) as RpcRequest;
-          // Handle request concurrently - don't await
-          handleRequest(request).then(sendResponse).catch((err) => {
+          // Handle request sequentially to ensure isolation
+          // Concurrency is achieved at the process pool level
+          try {
+            const response = await handleRequest(request);
+            sendResponse(response);
+          } catch (err) {
             sendResponse({
               id: request.id,
               error: { message: `execution error: ${err}` }
             });
-          });
+          }
         } catch (err) {
           sendResponse({
             id: 'unknown',

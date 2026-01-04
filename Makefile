@@ -59,7 +59,7 @@ benchmark-stats:
 
 # Statistical benchmark runner with output to file
 benchmark-stats-md:
-	go run ./cmd/benchmark -runs=100 -output=internal/benchmark/Results.md
+	go run ./cmd/benchmark -runs=1000 -output=internal/benchmark/Results.md
 
 # Clean build artifacts
 clean:

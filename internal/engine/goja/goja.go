@@ -62,11 +62,13 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	start := time.Now()
 
 	// Get runtime from pool
-	runtime, release, err := e.pool.acquire(ctx)
+	pooledRT, release, err := e.pool.acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire runtime: %w", err)
 	}
 	defer release()
+
+	runtime := pooledRT.runtime
 
 	// Only spawn cancellation goroutine if context has a deadline
 	// This avoids goroutine overhead for simple executions
@@ -83,12 +85,17 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 		}()
 	}
 
-	// Inject globals directly - runtime is cleared on release anyway
+	// Inject globals and track them for cleanup (context isolation)
+	pooledRT.userGlobalMu.Lock()
+	pooledRT.userGlobals = pooledRT.userGlobals[:0] // reset slice, keep capacity
 	for name, value := range globals {
 		if err := runtime.Set(name, value); err != nil {
+			pooledRT.userGlobalMu.Unlock()
 			return nil, fmt.Errorf("failed to set global %s: %w", name, err)
 		}
+		pooledRT.userGlobals = append(pooledRT.userGlobals, name)
 	}
+	pooledRT.userGlobalMu.Unlock()
 
 	// Wrap code to extract default export
 	wrappedCode := wrapCodeForExport(code)
@@ -204,8 +211,11 @@ type pool struct {
 }
 
 type pooledRuntime struct {
-	runtime *goja.Runtime
-	busy    atomic.Bool
+	runtime      *goja.Runtime
+	busy         atomic.Bool
+	baseGlobals  map[string]struct{} // globals set during createRuntime (never cleared)
+	userGlobals  []string            // globals set during execution (cleared on release)
+	userGlobalMu sync.Mutex          // protects userGlobals
 }
 
 func newPool(size int) *pool {
@@ -215,15 +225,20 @@ func newPool(size int) *pool {
 	p.cond = sync.NewCond(&p.mu)
 
 	for i := range size {
+		rt := createRuntime()
+		// Capture the base globals that should never be cleared
+		baseGlobals := captureGlobalNames(rt)
 		p.runtimes[i] = &pooledRuntime{
-			runtime: createRuntime(),
+			runtime:     rt,
+			baseGlobals: baseGlobals,
+			userGlobals: make([]string, 0, 16), // pre-allocate for typical usage
 		}
 	}
 
 	return p
 }
 
-func (p *pool) acquire(ctx context.Context) (*goja.Runtime, func(), error) {
+func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 	if p.closed.Load() {
 		return nil, nil, ErrPoolClosed
 	}
@@ -246,8 +261,8 @@ func (p *pool) acquire(ctx context.Context) (*goja.Runtime, func(), error) {
 		// Try to find a free runtime
 		for _, r := range p.runtimes {
 			if r.busy.CompareAndSwap(false, true) {
-				return r.runtime, func() {
-					clearRuntime(r.runtime)
+				return r, func() {
+					clearRuntime(r)
 					r.busy.Store(false)
 					// Signal waiting goroutines
 					p.cond.Signal()
@@ -326,7 +341,37 @@ func createRuntime() *goja.Runtime {
 	return runtime
 }
 
-// clearRuntime resets a runtime for reuse.
-func clearRuntime(runtime *goja.Runtime) {
-	runtime.ClearInterrupt()
+// captureGlobalNames returns a set of all global property names in the runtime.
+// This is used to identify base globals that should never be cleared.
+func captureGlobalNames(runtime *goja.Runtime) map[string]struct{} {
+	globals := make(map[string]struct{})
+	globalObj := runtime.GlobalObject()
+	for _, key := range globalObj.Keys() {
+		globals[key] = struct{}{}
+	}
+	return globals
+}
+
+// clearRuntime resets a pooled runtime for reuse, ensuring context isolation.
+// It removes all user-injected globals and any globals created during execution.
+func clearRuntime(pr *pooledRuntime) {
+	pr.runtime.ClearInterrupt()
+
+	// Clear explicitly tracked user globals
+	pr.userGlobalMu.Lock()
+	userGlobals := pr.userGlobals
+	pr.userGlobalMu.Unlock()
+
+	for _, name := range userGlobals {
+		pr.runtime.Set(name, goja.Undefined())
+	}
+
+	// Scan for any globals created during execution (e.g., via globalThis.foo = ...)
+	// and remove them if they weren't part of the base runtime
+	globalObj := pr.runtime.GlobalObject()
+	for _, key := range globalObj.Keys() {
+		if _, isBase := pr.baseGlobals[key]; !isBase {
+			pr.runtime.Set(key, goja.Undefined())
+		}
+	}
 }
