@@ -53,6 +53,10 @@ monaco:
 	@echo "Starting Monaco editor at http://localhost:8080"
 	go run ./cmd/monaco
 
+# Run function injection example
+functions:
+	go run ./cmd/functions
+
 # Statistical benchmark runner (generates markdown)
 benchmark-stats:
 	go run ./cmd/benchmark -runs=100
@@ -80,6 +84,7 @@ help:
 	@echo "  benchmark-stats - Run statistical benchmark (15 runs, markdown output)"
 	@echo "  benchmark-stats-md - Run statistical benchmark and save to file"
 	@echo "  monaco          - Run Monaco editor example"
+	@echo "  functions       - Run function injection example"
 	@echo "  fmt             - Format code"
 	@echo "  lint            - Run linter"
 	@echo "  tidy            - Tidy dependencies"

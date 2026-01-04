@@ -200,6 +200,26 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 		}
 	}
 
+	// Build TSCode prelude for functions that don't have GoFunc
+	// This needs to be prepended BEFORE transpilation so TypeScript is processed
+	codeToTranspile := code
+	var tsFunctionPrelude strings.Builder
+	goFunctions := make(map[string]any) // Functions with GoFunc for GOJA
+
+	for name, fn := range e.config.Functions {
+		if fn.GoFunc != nil {
+			goFunctions[name] = fn.GoFunc
+		}
+		if fn.TSCode != "" {
+			tsFunctionPrelude.WriteString(fn.TSCode)
+			tsFunctionPrelude.WriteByte('\n')
+		}
+	}
+
+	if tsFunctionPrelude.Len() > 0 {
+		codeToTranspile = tsFunctionPrelude.String() + codeToTranspile
+	}
+
 	// Select engine first (needed for transpilation format decision)
 	engineType := e.config.Engine
 	if engineType == EngineAuto {
@@ -224,9 +244,9 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	var js, sourceMap string
 	var err error
 	if engineType == EngineBun && hasTopLevelAwait {
-		js, sourceMap, err = e.transpiler.TranspileESM(code)
+		js, sourceMap, err = e.transpiler.TranspileESM(codeToTranspile)
 	} else {
-		js, sourceMap, err = e.transpiler.Transpile(code)
+		js, sourceMap, err = e.transpiler.Transpile(codeToTranspile)
 	}
 	if err != nil {
 		return nil, &ExecutionError{
@@ -257,30 +277,13 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	jsToExecute := js
 
 	// Inject functions based on engine type
-	if len(e.config.Functions) > 0 {
-		if engineType == EngineGOJA {
-			// For GOJA: merge Go functions into globals
-			merged := make(map[string]any, len(globals)+len(e.config.Functions))
-			maps.Copy(merged, globals)
-			for name, fn := range e.config.Functions {
-				if fn.GoFunc != nil {
-					merged[name] = fn.GoFunc
-				}
-			}
-			globals = merged
-		} else {
-			// For Bun: prepend TypeScript function definitions
-			var prelude strings.Builder
-			for _, fn := range e.config.Functions {
-				if fn.TSCode != "" {
-					prelude.WriteString(fn.TSCode)
-					prelude.WriteByte('\n')
-				}
-			}
-			if prelude.Len() > 0 {
-				jsToExecute = prelude.String() + jsToExecute
-			}
-		}
+	if len(e.config.Functions) > 0 && engineType == EngineGOJA && len(goFunctions) > 0 {
+		// For GOJA: merge Go functions into globals for performance
+		// TSCode is already transpiled into the JS, GoFunc overrides it
+		merged := make(map[string]any, len(globals)+len(goFunctions))
+		maps.Copy(merged, globals)
+		maps.Copy(merged, goFunctions)
+		globals = merged
 	}
 
 	// Final context check before execution

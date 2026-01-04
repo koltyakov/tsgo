@@ -192,11 +192,8 @@ executor := tsgo.New(
     "userId": 123,
     "config": map[string]any{"debug": true},
   }),
-  tsgo.WithFunctions(map[string]tsgo.FunctionDef{  // Callable functions
-    "sum": {
-      GoFunc: func(a, b float64) float64 { return a + b },
-      TSCode: "function sum(a, b) { return a + b; }",
-    },
+  tsgo.WithFunctions(map[string]tsgo.FunctionDef{  // Callable functions (see below)
+    "sum": {TSCode: `function sum(a: number, b: number): number { return a + b; }`},
   }),
   tsgo.WithSecurity(tsgo.SecurityPolicy{
     RestrictedGlobals: []string{"eval", "Function"},  // Block dangerous globals
@@ -209,32 +206,56 @@ defer executor.Close()  // Always close to release resources
 
 ### Injecting Functions
 
-You can inject Go functions that scripts can call. Each function requires both a Go implementation (for GOJA) and TypeScript code (for Bun):
+Inject helper functions that scripts can call. Define once in TypeScript, works on all engines:
 
 ```go
 executor := tsgo.New(
   tsgo.WithFunctions(map[string]tsgo.FunctionDef{
-    "sum": {
-      GoFunc: func(x, y float64) float64 { return x + y },
-      TSCode: "function sum(x, y) { return x + y; }",
+    // TSCode only (recommended) - works identically on GOJA and Bun
+    "add": {
+      TSCode: `function add(a: number, b: number): number { return a + b; }`,
     },
-    "greet": {
-      GoFunc: func(name string) string { return "Hello, " + name },
-      TSCode: "function greet(name) { return 'Hello, ' + name; }",
+    "capitalize": {
+      TSCode: `function capitalize(s: string): string {
+        return s.charAt(0).toUpperCase() + s.slice(1).toLowerCase();
+      }`,
+    },
+
+    // TSCode + GoFunc (performance optimization)
+    // GOJA uses native Go function, Bun uses TSCode
+    "sqrt": {
+      TSCode: `function sqrt(x: number): number { return Math.sqrt(x); }`,
+      GoFunc: math.Sqrt, // Optional: faster execution in GOJA
     },
   }),
 )
 
 // Scripts can now call these functions:
-result, _ := executor.Execute(ctx, `export default sum(10, 20)`) // 30
+result, _ := executor.Execute(ctx, `
+  const sum = add(10, 20);
+  const title = capitalize("hello world");
+  const root = sqrt(16);
+  export default { sum, title, root };
+`)
+// Result: { sum: 30, title: "Hello world", root: 4 }
 ```
+
+**Two approaches:**
+
+| Approach | TSCode | GoFunc | Use Case |
+|----------|--------|--------|----------|
+| **TSCode only** | ✅ Required | ❌ Omit | Simple functions, no duplication |
+| **TSCode + GoFunc** | ✅ Required | ✅ Optional | Performance-critical GOJA code |
 
 For type-aware IntelliSense in Monaco, add function declarations to the type builder:
 
 ```go
-builder := typegen.NewBuilder()
-builder.AddFunction("sum", "x: number, y: number", "number", "Adds two numbers")
+builder := tsgo.NewTypeBuilder()
+builder.AddFunction("add", "a: number, b: number", "number", "Adds two numbers")
+builder.AddFunction("capitalize", "s: string", "string", "Capitalizes first letter")
 ```
+
+See [cmd/functions](cmd/functions/main.go) for a complete example with various function types.
 
 ## Execution Isolation
 
@@ -509,7 +530,7 @@ function multiply(x: number, y: number): number;
 
 ```
 github.com/koltyakov/tsgo
-├── tsgo.go                 # Public API: Executor, Options, TypeBuilder
+├── tsgo.go                 # Public API: Executor, Options, TypeBuilder, MonacoHandler
 ├── internal/
 │   ├── types/              # Core types: EngineType, Result, Config, SecurityPolicy
 │   ├── engine/             # Execution engine interface
@@ -525,6 +546,7 @@ github.com/koltyakov/tsgo
 │   └── benchmark/          # Performance benchmarks and comparison tests
 └── cmd/
     ├── basic/              # Basic usage example
+    ├── functions/          # Function injection example (TSCode + GoFunc)
     ├── monaco/             # Monaco playground (make monaco)
     └── benchmark/          # Statistical benchmark runner
 ```

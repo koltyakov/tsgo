@@ -63,14 +63,37 @@ func DefaultSecurityPolicy() SecurityPolicy {
 }
 
 // FunctionDef defines a function that can be injected into the script execution context.
-// It provides both a Go implementation (for GOJA) and TypeScript code (for Bun).
+//
+// There are two ways to define functions:
+//
+//  1. TSCode only (recommended): Define the function once in TypeScript/JavaScript.
+//     Works for both GOJA and Bun engines with no code duplication.
+//
+//     tsgo.FunctionDef{
+//     TSCode: `function sum(a: number, b: number): number { return a + b; }`,
+//     }
+//
+//  2. TSCode + GoFunc (performance optimization): Provide both implementations.
+//     GOJA uses GoFunc (faster, native Go), Bun uses TSCode.
+//
+//     tsgo.FunctionDef{
+//     TSCode: `function sum(a: number, b: number): number { return a + b; }`,
+//     GoFunc: func(a, b float64) float64 { return a + b },
+//     }
+//
+// When GoFunc is nil, both engines execute TSCode by prepending it to the script.
+// When GoFunc is provided, GOJA injects it as a native function for better performance.
 type FunctionDef struct {
-	// GoFunc is the Go function implementation used by GOJA engine.
-	// The function signature should match the TypeScript signature.
-	GoFunc any
-	// TSCode is the TypeScript/JavaScript implementation used by Bun engine.
-	// Example: "function sum(x, y) { return x + y; }"
+	// TSCode is the TypeScript/JavaScript implementation.
+	// This is the primary definition and works for both engines.
+	// Example: `function sum(a: number, b: number): number { return a + b; }`
 	TSCode string
+
+	// GoFunc is an optional Go function implementation for GOJA engine.
+	// When provided, GOJA uses this instead of TSCode for better performance.
+	// The function signature should match the TypeScript signature.
+	// When nil, GOJA executes TSCode like Bun does.
+	GoFunc any
 }
 
 // ExecutorConfig configures the TypeScript executor.
