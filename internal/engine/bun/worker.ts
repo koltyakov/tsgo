@@ -66,10 +66,14 @@ function cleanupGlobals(): void {
 
 // Execute user code and extract default export
 async function executeCode(code: string, context: Record<string, unknown>): Promise<unknown> {
-  // Check if code is already transpiled (IIFE format from esbuild with __tsgo_exports__)
-  const isTranspiled = code.includes('__tsgo_exports__');
+  // Check if code is already transpiled
+  // IIFE format: contains __tsgo_exports__
+  // ESM format: starts with "// " comment (esbuild adds sourcemap comment) and has "export"
+  const isIIFE = code.includes('__tsgo_exports__');
+  const isESM = code.includes('export ') || code.includes('export{');
+  const isTranspiled = isIIFE || isESM;
   
-  if (isTranspiled) {
+  if (isIIFE) {
     // The code comes pre-transpiled from esbuild as an IIFE with GlobalName="__tsgo_exports__"
     // Format: var __tsgo_exports__ = (() => { ... return exports; })();
     
@@ -114,6 +118,48 @@ return typeof __tsgo_exports__ !== 'undefined' ? __tsgo_exports__ : undefined;
     }
     
     return exports;
+  } else if (isESM) {
+    // ESM format from esbuild - use dynamic import via Blob URL
+    // ESM already handles exports properly
+    const contextKeys = Object.keys(context);
+    const contextDeclarations = contextKeys.length > 0
+      ? `const __context__ = ${JSON.stringify(context)};\n` +
+        contextKeys.map(key => 
+          `const ${key} = __context__["${key}"];`
+        ).join('\n')
+      : '';
+
+    const wrappedCode = `
+${contextDeclarations}
+
+${code}
+`;
+
+    const blob = new Blob([wrappedCode], { type: 'application/javascript' });
+    const url = URL.createObjectURL(blob);
+
+    try {
+      const module = await import(url);
+      
+      // Get the default export
+      const handler = module.default;
+      
+      // If default export is a function, invoke it
+      if (typeof handler === 'function') {
+        const result = handler();
+        
+        // Handle async functions
+        if (result instanceof Promise) {
+          return await result;
+        }
+        return result;
+      }
+      
+      // Return the value directly if not a function
+      return handler;
+    } finally {
+      URL.revokeObjectURL(url);
+    }
   } else {
     // Raw TypeScript/JavaScript code - use dynamic import via Blob URL
     // Inject context via JSON serialization for full isolation

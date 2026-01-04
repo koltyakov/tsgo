@@ -36,13 +36,22 @@ header h1 {
   gap: 12px;
 }
 
-.engine-select {
+.engine-select,
+.sample-select {
   background: #3c3c3c;
   color: #cccccc;
   border: 1px solid #555;
   padding: 6px 12px;
   border-radius: 4px;
   font-size: 12px;
+}
+
+.sample-select {
+  min-width: 140px;
+}
+
+.sample-select option[value=""] {
+  color: #888;
 }
 
 .run-btn {
@@ -72,6 +81,7 @@ header h1 {
   align-items: center;
   gap: 8px;
   font-size: 12px;
+  color: #888;
 }
 
 .status-dot {
@@ -79,6 +89,7 @@ header h1 {
   height: 8px;
   border-radius: 50%;
   background: #f44747;
+  transition: background 0.3s ease;
 }
 
 .status-dot.connected {
@@ -175,6 +186,7 @@ aside {
   color: #bbbbbb;
   background: #2d2d2d;
   border-bottom: 1px solid #3c3c3c;
+  user-select: none;
 }
 
 #types-preview {
@@ -226,6 +238,7 @@ aside {
   display: flex;
   background: #2d2d2d;
   border-bottom: 1px solid #3c3c3c;
+  user-select: none;
 }
 
 .contract-tab {
@@ -290,6 +303,21 @@ aside {
   display: flex;
   justify-content: space-between;
   align-items: center;
+  user-select: none;
+}
+
+.output-status {
+  margin-left: 8px;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.output-status.success {
+  color: #89d185;
+}
+
+.output-status.error {
+  color: #f48771;
 }
 
 .output-meta {

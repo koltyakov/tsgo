@@ -369,7 +369,7 @@ func runBenchmarks(runs, warmup int, hasBun bool) []BenchResult {
 
 	// Create engines
 	gojaEngine := goja.New(goja.Config{PoolSize: 8})
-	defer gojaEngine.Close()
+	defer func() { _ = gojaEngine.Close() }()
 
 	var bunEngine *bun.Engine
 	if hasBun {
@@ -378,7 +378,7 @@ func runBenchmarks(runs, warmup int, hasBun bool) []BenchResult {
 		if err != nil || !bunEngine.IsAvailable() {
 			hasBun = false
 		} else {
-			defer bunEngine.Close()
+			defer func() { _ = bunEngine.Close() }()
 		}
 	}
 
@@ -405,14 +405,14 @@ func runBenchmarks(runs, warmup int, hasBun bool) []BenchResult {
 
 		// Warmup
 		for i := 0; i < warmup; i++ {
-			gojaEngine.Execute(ctx, transpiled, tc.globals)
+			_, _ = gojaEngine.Execute(ctx, transpiled, tc.globals)
 		}
 
 		// Memory measurement for GOJA (single run after warmup)
 		runtime.GC()
 		var memBefore, memAfter runtime.MemStats
 		runtime.ReadMemStats(&memBefore)
-		gojaEngine.Execute(ctx, transpiled, tc.globals)
+		_, _ = gojaEngine.Execute(ctx, transpiled, tc.globals)
 		runtime.ReadMemStats(&memAfter)
 		result.GOJAMemory = &MemoryStats{
 			AllocBytes: memAfter.TotalAlloc - memBefore.TotalAlloc,
@@ -437,7 +437,7 @@ func runBenchmarks(runs, warmup int, hasBun bool) []BenchResult {
 			// Warmup
 			for i := 0; i < warmup; i++ {
 				ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-				bunEngine.Execute(ctx, tc.code, tc.globals)
+				_, _ = bunEngine.Execute(ctx, tc.code, tc.globals)
 				cancel()
 			}
 
@@ -446,7 +446,7 @@ func runBenchmarks(runs, warmup int, hasBun bool) []BenchResult {
 			runtime.GC()
 			runtime.ReadMemStats(&memBefore)
 			ctxMem, cancelMem := context.WithTimeout(context.Background(), 5*time.Second)
-			bunEngine.Execute(ctxMem, tc.code, tc.globals)
+			_, _ = bunEngine.Execute(ctxMem, tc.code, tc.globals)
 			cancelMem()
 			runtime.ReadMemStats(&memAfter)
 			result.BunMemory = &MemoryStats{
@@ -487,7 +487,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 	transpiled, _, _ := trans.Transpile(code)
 
 	gojaEngine := goja.New(goja.Config{PoolSize: 32})
-	defer gojaEngine.Close()
+	defer func() { _ = gojaEngine.Close() }()
 
 	var bunEngine *bun.Engine
 	if hasBun {
@@ -496,7 +496,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 		if err != nil || !bunEngine.IsAvailable() {
 			hasBun = false
 		} else {
-			defer bunEngine.Close()
+			defer func() { _ = bunEngine.Close() }()
 		}
 	}
 
@@ -521,7 +521,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 			for j := 0; j < level; j++ {
 				go func() {
 					defer wg.Done()
-					gojaEngine.Execute(ctx, transpiled, nil)
+					_, _ = gojaEngine.Execute(ctx, transpiled, nil)
 				}()
 			}
 			wg.Wait()
@@ -535,7 +535,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 			for j := 0; j < level; j++ {
 				go func() {
 					defer wg.Done()
-					gojaEngine.Execute(ctx, transpiled, nil)
+					_, _ = gojaEngine.Execute(ctx, transpiled, nil)
 				}()
 			}
 			wg.Wait()
@@ -555,7 +555,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 					go func() {
 						defer wg.Done()
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						bunEngine.Execute(ctx, code, nil)
+						_, _ = bunEngine.Execute(ctx, code, nil)
 						cancel()
 					}()
 				}
@@ -571,7 +571,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 					go func() {
 						defer wg.Done()
 						ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-						bunEngine.Execute(ctx, code, nil)
+						_, _ = bunEngine.Execute(ctx, code, nil)
 						cancel()
 					}()
 				}

@@ -1,48 +1,31 @@
 const defaultCode = `// tsgo TypeScript Playground
-// Press ⌘+Enter to run, or click the Run button
+// Loading sample...
 
-// Access injected global variables with full type support
-const user: User = currentUser;
-const greeting = \`Hello, \${user.name}!\`;
-
-// Use the config object (console.log works in both GOJA and Bun)
-if (config.debug) {
-  console.log("Debug mode enabled");
-  console.log(\`API URL: \${config.apiUrl}\`);
-}
-
-// Use injected helper functions (work in both GOJA and Bun!)
-const total = sum(10, 20);
-const product = multiply(5, 6);
-
-// Create a new user object
-const newUser: User = {
-  id: 2,
-  name: "Alice",
-  email: "alice@example.com",
-  role: "user"
-};
-
-// Do some computation
-function fibonacci(n: number): number {
-  if (n <= 1) return n;
-  return fibonacci(n - 1) + fibonacci(n - 2);
-}
-
-const fib10 = fibonacci(10);
-
-// Return a result (last expression or export default)
-export default {
-  greeting,
-  newUser,
-  fib10,
-  userRole: user.role,
-  // Show the injected function results
-  mathResults: { sum: total, product }
-};
+export default {};
 `;
 
 const STORAGE_KEY = 'tsgo-playground-code';
+const CONTEXT_KEY = 'tsgo-playground-context';
+const SAMPLE_KEY = 'tsgo-playground-sample';
+const DEFAULT_SAMPLE = 'hello-world';
+
+// Current context code (loaded from .ctx.ts file)
+let currentContextCode = '';
+let currentSampleId = '';
+
+// Strip @ts-nocheck and triple-slash references from code for Monaco display
+function stripTripleSlashRefs(code) {
+  return code
+    .replace(/^\/\/ @ts-nocheck.*\n?/gm, '')
+    .replace(/^\/\/\/\s*<reference.*\/>\s*\n?/gm, '')
+    .trim() + '\n';
+}
+
+// Sample metadata with recommended engines
+const SAMPLE_ENGINES = {
+  'async-fetch': 'bun',
+  'parallel-tasks': 'bun',
+};
 
 // GOJA unsupported features patterns
 const GOJA_UNSUPPORTED_PATTERNS = [
@@ -56,7 +39,6 @@ const GOJA_UNSUPPORTED_PATTERNS = [
   { pattern: /\bsetInterval\s*\(/g, message: 'setInterval() is not available in GOJA engine' },
 ];
 
-let ws = null;
 let monaco = null;
 let editor = null;
 let extraLib = null;
@@ -78,45 +60,6 @@ function saveCode(code) {
   }
 }
 
-function updateStatus(connected) {
-  const dot = document.getElementById('status-dot');
-  const text = document.getElementById('status-text');
-  if (connected) {
-    dot.classList.add('connected');
-    text.textContent = 'Connected';
-  } else {
-    dot.classList.remove('connected');
-    text.textContent = 'Disconnected';
-  }
-}
-
-function connectWebSocket() {
-  ws = new WebSocket('ws://localhost:8080/monaco/ws');
-
-  ws.onopen = () => updateStatus(true);
-  ws.onclose = () => {
-    updateStatus(false);
-    setTimeout(connectWebSocket, 2000);
-  };
-
-  ws.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    if (data.type === 'types' && monaco) {
-      // Update Monaco types
-      if (extraLib) extraLib.dispose();
-      extraLib = monaco.languages.typescript.typescriptDefaults.addExtraLib(
-        data.types,
-        'file:///node_modules/@types/tsgo/index.d.ts'
-      );
-      // Update preview with syntax highlighting
-      const typesPreview = document.getElementById('types-preview');
-      typesPreview.textContent = data.types;
-      typesPreview.setAttribute('data-lang', 'typescript');
-      monaco.editor.colorizeElement(typesPreview, { theme: 'vs-dark' });
-    }
-  };
-}
-
 async function runCode() {
   const btn = document.getElementById('run-btn');
   const output = document.getElementById('output');
@@ -128,34 +71,43 @@ async function runCode() {
   output.className = '';
   output.textContent = 'Executing...';
   meta.textContent = '';
+  const status = document.getElementById('output-status');
+  status.textContent = '';
+  status.className = 'output-status';
 
   try {
     const code = editor.getValue();
     const response = await fetch('/execute', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code, engine })
+      body: JSON.stringify({ code, contextCode: currentContextCode, engine })
     });
 
     const result = await response.json();
 
     if (result.error) {
       output.className = 'error';
-      output.textContent = '❌ Error:\n' + result.error;
+      status.textContent = '✗ Error';
+      status.className = 'output-status error';
+      output.textContent = result.error;
     } else {
       output.className = 'success';
+      status.textContent = '✓ Success';
+      status.className = 'output-status success';
       let valueStr;
       if (typeof result.value === 'object') {
         valueStr = JSON.stringify(result.value, null, 2);
       } else {
         valueStr = String(result.value);
       }
-      output.textContent = '✅ Result:\n' + valueStr;
+      output.textContent = valueStr;
       meta.textContent = `${result.engine} • ${result.duration} • ${result.type}`;
     }
   } catch (err) {
     output.className = 'error';
-    output.textContent = '❌ Network Error:\n' + err.message;
+    status.textContent = '✗ Error';
+    status.className = 'output-status error';
+    output.textContent = 'Network Error: ' + err.message;
   } finally {
     btn.disabled = false;
     btn.innerHTML = '▶ Run <span class="kbd">⌘↵</span>';
@@ -228,9 +180,6 @@ function initMonaco() {
 
     // Initial validation
     validateForEngine();
-
-    // Connect to WebSocket for live type updates
-    connectWebSocket();
   });
 }
 
@@ -442,7 +391,7 @@ function initContractGeneration() {
       const response = await fetch('/contract', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ code })
+        body: JSON.stringify({ code, contextCode: currentContextCode })
       });
       
       const result = await response.json();
@@ -478,8 +427,8 @@ function initContractGeneration() {
     if (editor) {
       clearInterval(checkEditor);
       editor.onDidChangeModelContent(debouncedGenerate);
-      // Generate initial contract
-      generateContract();
+      // Don't generate initial contract here - let sample loading trigger it
+      // This avoids showing "any" type before the context is loaded
     }
   }, 100);
 }
@@ -489,4 +438,271 @@ document.addEventListener('DOMContentLoaded', () => {
   initMonaco();
   initResizablePanels();
   initContractGeneration();
+  initSampleSelector();
+  initWebSocket();
 });
+
+// WebSocket for connection status
+function initWebSocket() {
+  const wsStatus = document.getElementById('ws-status');
+  const wsText = document.getElementById('ws-text');
+  
+  function connect() {
+    const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${location.host}/monaco/ws`);
+    
+    ws.onopen = () => {
+      wsStatus.classList.add('connected');
+      wsStatus.title = 'Connected';
+      wsText.textContent = 'Connected';
+    };
+    
+    ws.onclose = () => {
+      wsStatus.classList.remove('connected');
+      wsStatus.title = 'Disconnected';
+      wsText.textContent = 'Disconnected';
+      // Reconnect after 3 seconds
+      setTimeout(connect, 3000);
+    };
+    
+    ws.onerror = () => {
+      // Will trigger onclose
+    };
+    
+    ws.onmessage = (event) => {
+      // Handle potential future messages
+      try {
+        const data = JSON.parse(event.data);
+        console.log('WS message:', data);
+      } catch (e) {
+        // Ignore non-JSON messages
+      }
+    };
+  }
+  
+  connect();
+}
+
+// Update Monaco with context types
+function updateMonacoTypes(contextCode) {
+  if (!monaco) return;
+  
+  // Dispose old extra lib
+  if (extraLib) {
+    extraLib.dispose();
+    extraLib = null;
+  }
+  
+  if (!contextCode) {
+    // No context - clear types preview
+    const typesPreview = document.getElementById('types-preview');
+    typesPreview.textContent = '// No context loaded\n// Select a sample to load types';
+    return;
+  }
+  
+  // Extract type declarations from context for Monaco IntelliSense
+  // The context file is valid TypeScript, so we use it directly
+  // But we need to convert exports to ambient declarations for the editor
+  const ambientTypes = convertToAmbientDeclarations(contextCode);
+  
+  extraLib = monaco.languages.typescript.typescriptDefaults.addExtraLib(
+    ambientTypes,
+    'file:///node_modules/@types/tsgo/index.d.ts'
+  );
+  
+  // Update types preview
+  const typesPreview = document.getElementById('types-preview');
+  typesPreview.textContent = ambientTypes;
+  typesPreview.setAttribute('data-lang', 'typescript');
+  monaco.editor.colorizeElement(typesPreview, { theme: 'vs-dark' });
+}
+
+// Extract interfaces from context code, handling nested braces
+function extractInterfaces(code) {
+  const interfaces = [];
+  const interfaceStartRegex = /interface\s+(\w+)\s*\{/g;
+  let match;
+  
+  while ((match = interfaceStartRegex.exec(code)) !== null) {
+    const startIndex = match.index;
+    const braceStart = code.indexOf('{', startIndex);
+    
+    // Count braces to find matching closing brace
+    let depth = 0;
+    let endIndex = braceStart;
+    for (let i = braceStart; i < code.length; i++) {
+      if (code[i] === '{') depth++;
+      else if (code[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          endIndex = i + 1;
+          break;
+        }
+      }
+    }
+    
+    interfaces.push(code.slice(startIndex, endIndex));
+  }
+  
+  return interfaces;
+}
+
+// Convert context code to ambient declarations for Monaco
+function convertToAmbientDeclarations(contextCode) {
+  const parts = [];
+  parts.push('// Auto-generated from context file');
+  
+  // Extract interface declarations with proper nested brace handling
+  const interfaces = extractInterfaces(contextCode);
+  if (interfaces.length > 0) {
+    parts.push(''); // blank line before interfaces
+    parts.push(...interfaces);
+  }
+  
+  // Convert exported const to declare const
+  const constRegex = /export\s+const\s+(\w+)\s*:\s*([^=]+)\s*=/g;
+  let match;
+  const consts = [];
+  const foundConstNames = new Set();
+  
+  // First pass: consts with explicit type annotations
+  while ((match = constRegex.exec(contextCode)) !== null) {
+    const [, name, type] = match;
+    consts.push(`declare const ${name}: ${type.trim()};`);
+    foundConstNames.add(name);
+  }
+  
+  // Second pass: consts without type annotations (infer from value)
+  const constNoTypeRegex = /export\s+const\s+(\w+)\s*=\s*([^;]+);/g;
+  while ((match = constNoTypeRegex.exec(contextCode)) !== null) {
+    const [, name, value] = match;
+    if (foundConstNames.has(name)) continue; // Already found with explicit type
+    
+    // Infer type from value
+    const trimmedValue = value.trim();
+    let inferredType = 'any';
+    if (/^-?\d+\.\d+$/.test(trimmedValue) || /^-?\d+$/.test(trimmedValue)) {
+      inferredType = 'number';
+    } else if (/^["'`]/.test(trimmedValue)) {
+      inferredType = 'string';
+    } else if (trimmedValue === 'true' || trimmedValue === 'false') {
+      inferredType = 'boolean';
+    } else if (trimmedValue.startsWith('[')) {
+      inferredType = 'any[]';
+    } else if (trimmedValue.startsWith('{')) {
+      inferredType = 'object';
+    }
+    
+    consts.push(`declare const ${name}: ${inferredType};`);
+    foundConstNames.add(name);
+  }
+  
+  if (consts.length > 0) {
+    parts.push(''); // blank line before consts
+    parts.push(...consts);
+  }
+  
+  // Convert exported functions to declare function
+  const funcRegex = /export\s+function\s+(\w+)\s*\(([^)]*)\)\s*:\s*(\w+)/g;
+  const funcs = [];
+  while ((match = funcRegex.exec(contextCode)) !== null) {
+    const [, name, params, returnType] = match;
+    funcs.push(`declare function ${name}(${params}): ${returnType};`);
+  }
+  if (funcs.length > 0) {
+    parts.push(''); // blank line before functions
+    parts.push(...funcs);
+  }
+  
+  return parts.join('\n');
+}
+
+// Load a sample and its context from the server
+async function loadSample(sampleId) {
+  if (!sampleId || !editor) return;
+  
+  const sampleSelect = document.getElementById('sample-select');
+  const engineSelect = document.getElementById('engine-select');
+  const output = document.getElementById('output');
+  
+  // Clear the output panel when switching samples
+  output.textContent = '// Select a sample and click Run';
+  output.className = '';
+  document.querySelector('.output-meta').textContent = '';
+  const outputStatus = document.getElementById('output-status');
+  outputStatus.textContent = '';
+  outputStatus.className = 'output-status';
+  
+  try {
+    // Fetch sample from the /sample/ endpoint which splits context and code
+    const response = await fetch(`/sample/${sampleId}`);
+    
+    if (!response.ok) {
+      throw new Error(`Sample not found: ${sampleId}`);
+    }
+    
+    const { context, code } = await response.json();
+    
+    // Update context types in Monaco
+    currentContextCode = context || '';
+    updateMonacoTypes(currentContextCode);
+    
+    // Strip triple-slash references for Monaco display
+    const displayCode = stripTripleSlashRefs(code);
+    
+    // Update editor
+    editor.setValue(displayCode);
+    
+    // Switch engine if sample requires Bun
+    if (SAMPLE_ENGINES[sampleId]) {
+      engineSelect.value = SAMPLE_ENGINES[sampleId];
+      validateForEngine();
+    } else {
+      engineSelect.value = 'auto';
+      validateForEngine();
+    }
+    
+    // Keep track of current sample
+    currentSampleId = sampleId;
+    sampleSelect.value = sampleId;
+    
+    // Save to localStorage
+    saveCode(displayCode);
+    localStorage.setItem(CONTEXT_KEY, currentContextCode);
+    localStorage.setItem(SAMPLE_KEY, sampleId);
+    
+  } catch (err) {
+    console.error('Failed to load sample:', err);
+    alert(`Failed to load sample: ${err.message}`);
+  }
+}
+
+function initSampleSelector() {
+  const sampleSelect = document.getElementById('sample-select');
+  
+  // Restore sample from localStorage or load default
+  let sampleToLoad = DEFAULT_SAMPLE;
+  try {
+    const savedSample = localStorage.getItem(SAMPLE_KEY);
+    if (savedSample) {
+      sampleToLoad = savedSample;
+    }
+  } catch (e) {
+    // Ignore storage errors
+  }
+  
+  // Wait for Monaco to be ready, then load sample
+  const checkMonaco = setInterval(() => {
+    if (monaco && editor) {
+      clearInterval(checkMonaco);
+      loadSample(sampleToLoad);
+    }
+  }, 100);
+  
+  sampleSelect.addEventListener('change', (e) => {
+    const sampleId = e.target.value;
+    if (sampleId) {
+      loadSample(sampleId);
+    }
+  });
+}

@@ -61,9 +61,64 @@ func (t *Transpiler) Transpile(code string) (string, string, error) {
 	// Transpile using esbuild
 	opts := api.TransformOptions{
 		Loader:            api.LoaderTS,
-		Target:            api.ES2020,
+		Target:            api.ES2022,
 		Format:            api.FormatIIFE,
 		GlobalName:        "__tsgo_exports__",
+		MinifyWhitespace:  false,
+		MinifyIdentifiers: false,
+		MinifySyntax:      false,
+		Sourcemap:         api.SourceMapInline,
+	}
+
+	result := api.Transform(code, opts)
+
+	if len(result.Errors) > 0 {
+		err := result.Errors[0]
+		return "", "", &TranspileError{
+			Message: err.Text,
+			Line:    err.Location.Line,
+			Column:  err.Location.Column,
+		}
+	}
+
+	jsCode := string(result.Code)
+	sourceMap := extractInlineSourceMap(jsCode)
+
+	// Cache result (thread-safe)
+	t.cache.put(hash, &transpileResult{
+		code:      jsCode,
+		sourceMap: sourceMap,
+	})
+
+	return jsCode, sourceMap, nil
+}
+
+// TranspileESM converts TypeScript code to JavaScript using ESM format.
+// This is needed for top-level await support (IIFE doesn't support it).
+// Returns the JavaScript code and source map.
+// This method is safe for concurrent use.
+func (t *Transpiler) TranspileESM(code string) (string, string, error) {
+	if len(code) == 0 {
+		return "", "", &TranspileError{Message: "code cannot be empty"}
+	}
+
+	// Preprocess: if no export default, wrap trailing expression
+	code = preprocessTrailingExpression(code)
+
+	// Compute hash with ESM suffix to differentiate from IIFE cache
+	hash := hashCode(code + ":esm")
+
+	// Check cache (thread-safe)
+	if cached, ok := t.cache.get(hash); ok {
+		result := cached.(*transpileResult)
+		return result.code, result.sourceMap, nil
+	}
+
+	// Transpile using esbuild with ESM format
+	opts := api.TransformOptions{
+		Loader:            api.LoaderTS,
+		Target:            api.ES2022,
+		Format:            api.FormatESModule,
 		MinifyWhitespace:  false,
 		MinifyIdentifiers: false,
 		MinifySyntax:      false,
@@ -231,7 +286,7 @@ func removeComments(code string) string {
 			if code[i] == '/' && code[i+1] == '*' {
 				// Multi-line comment
 				i += 2
-				for i+1 < len(code) && !(code[i] == '*' && code[i+1] == '/') {
+				for i+1 < len(code) && (code[i] != '*' || code[i+1] != '/') {
 					i++
 				}
 				i += 2

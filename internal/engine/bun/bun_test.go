@@ -18,7 +18,7 @@ func TestBunEngine(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	if !engine.IsAvailable() {
 		t.Skip("Bun engine is not available")
@@ -173,7 +173,7 @@ func TestContextIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	if !engine.IsAvailable() {
 		t.Skip("Bun engine is not available")
@@ -266,7 +266,7 @@ func TestContextIsolation_Concurrent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	if !engine.IsAvailable() {
 		t.Skip("Bun engine is not available")

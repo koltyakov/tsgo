@@ -13,12 +13,12 @@ func TestNew(t *testing.T) {
 	if engine == nil {
 		t.Fatal("expected engine to be created")
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 }
 
 func TestExecute_SimpleExpression(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	result, err := engine.Execute(ctx, "1 + 2", nil)
@@ -47,7 +47,7 @@ func TestExecute_SimpleExpression(t *testing.T) {
 
 func TestExecute_WithGlobals(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	globals := map[string]any{
@@ -74,7 +74,7 @@ func TestExecute_WithGlobals(t *testing.T) {
 
 func TestExecute_StringResult(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	result, err := engine.Execute(ctx, `"hello" + " " + "world"`, nil)
@@ -90,7 +90,7 @@ func TestExecute_StringResult(t *testing.T) {
 
 func TestExecute_FunctionExecution(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	code := `
@@ -117,7 +117,7 @@ func TestExecute_FunctionExecution(t *testing.T) {
 
 func TestExecute_ContextCancellation(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
 	defer cancel()
@@ -137,7 +137,7 @@ func TestExecute_ContextCancellation(t *testing.T) {
 
 func TestExecute_SyntaxError(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	_, err := engine.Execute(ctx, "function {", nil)
@@ -216,7 +216,7 @@ func TestPoolClosed(t *testing.T) {
 
 func TestExecute_ComparisonExpression(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	// Note: These tests test the raw GOJA engine without transpilation.
 	// Multi-statement code with trailing expressions requires preprocessing
@@ -258,7 +258,7 @@ func TestExecute_ComparisonExpression(t *testing.T) {
 
 func TestAsyncFunctionExport(t *testing.T) {
 	engine := New(Config{PoolSize: 2})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	// Test that async functions return a clear error
 	// GOJA can't resolve promises (no event loop), so we return an error
@@ -301,7 +301,7 @@ func TestContextIsolation(t *testing.T) {
 	// This test verifies that context does not leak between executions.
 	// Critical for BPMN engines where each process must be isolated.
 	engine := New(Config{PoolSize: 1}) // Single runtime to guarantee reuse
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 
@@ -397,7 +397,7 @@ func TestContextIsolation(t *testing.T) {
 func TestContextIsolation_Concurrent(t *testing.T) {
 	// Test concurrent isolation with multiple runtimes
 	engine := New(Config{PoolSize: 4})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 	const numGoroutines = 20

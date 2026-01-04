@@ -139,7 +139,7 @@ func setupWorkerScript(customScript string) (workerPath string, tempDir string, 
 		}
 		path := filepath.Join(tmpDir, "custom_worker.ts")
 		if err := os.WriteFile(path, []byte(customScript), 0600); err != nil {
-			os.RemoveAll(tmpDir)
+			_ = os.RemoveAll(tmpDir)
 			return "", "", err
 		}
 		return path, tmpDir, nil
@@ -156,7 +156,7 @@ func setupWorkerScript(customScript string) (workerPath string, tempDir string, 
 
 	path := filepath.Join(tmpDir, "bun_worker.ts")
 	if err := os.WriteFile(path, content, 0600); err != nil {
-		os.RemoveAll(tmpDir)
+		_ = os.RemoveAll(tmpDir)
 		return "", "", err
 	}
 
@@ -378,7 +378,7 @@ func (p *pool) startProcess() (*process, error) {
 
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		stdin.Close()
+		_ = stdin.Close()
 		return nil, err
 	}
 
@@ -386,8 +386,8 @@ func (p *pool) startProcess() (*process, error) {
 	cmd.Stderr = os.Stderr
 
 	if err := cmd.Start(); err != nil {
-		stdin.Close()
-		stdout.Close()
+		_ = stdin.Close()
+		_ = stdout.Close()
 		return nil, err
 	}
 
@@ -774,8 +774,8 @@ func (proc *process) close() {
 		// Send shutdown request
 		req := &request{ID: "shutdown", Method: "shutdown"}
 		data, _ := json.Marshal(req)
-		proc.stdin.Write(append(data, '\n'))
-		proc.stdin.Close()
+		_, _ = proc.stdin.Write(append(data, '\n'))
+		_ = proc.stdin.Close()
 	}
 
 	if proc.cmd != nil && proc.cmd.Process != nil {
@@ -786,7 +786,7 @@ func (proc *process) close() {
 		select {
 		case <-done:
 		case <-time.After(2 * time.Second):
-			proc.cmd.Process.Kill()
+			_ = proc.cmd.Process.Kill()
 		}
 	}
 }

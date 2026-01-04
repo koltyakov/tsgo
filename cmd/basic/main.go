@@ -24,7 +24,7 @@ func main() {
 			"isAdmin":  true,
 		}),
 	)
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	ctx := context.Background()
 

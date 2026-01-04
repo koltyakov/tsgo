@@ -1,0 +1,60 @@
+{
+  "samples": [
+    {
+      "id": "hello-world",
+      "name": "Hello World",
+      "description": "Basic greeting with type-safe globals",
+      "category": "basic",
+      "engine": "auto"
+    },
+    {
+      "id": "fibonacci",
+      "name": "Fibonacci Sequence",
+      "description": "Classic recursive algorithm demonstration",
+      "category": "basic",
+      "engine": "auto"
+    },
+    {
+      "id": "data-transform",
+      "name": "Data Transformation",
+      "description": "Transform and filter data collections",
+      "category": "intermediate",
+      "engine": "auto"
+    },
+    {
+      "id": "validation",
+      "name": "Input Validation",
+      "description": "Schema validation with error handling",
+      "category": "intermediate",
+      "engine": "auto"
+    },
+    {
+      "id": "state-machine",
+      "name": "State Machine",
+      "description": "Order workflow state transitions",
+      "category": "advanced",
+      "engine": "auto"
+    },
+    {
+      "id": "rule-engine",
+      "name": "Business Rules Engine",
+      "description": "Dynamic pricing calculation rules",
+      "category": "advanced",
+      "engine": "auto"
+    },
+    {
+      "id": "async-fetch",
+      "name": "Async HTTP Fetch",
+      "description": "Fetch data from external API (Bun only)",
+      "category": "bun-only",
+      "engine": "bun"
+    },
+    {
+      "id": "parallel-tasks",
+      "name": "Parallel Tasks",
+      "description": "Concurrent async operations (Bun only)",
+      "category": "bun-only",
+      "engine": "bun"
+    }
+  ]
+}

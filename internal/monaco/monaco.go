@@ -78,7 +78,7 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 
 	h.mu.Lock()
 	h.clients[conn] = true
@@ -94,7 +94,7 @@ func (h *Handler) handleWebSocket(w http.ResponseWriter, r *http.Request) {
 	dts := h.types.Build()
 	h.mu.RUnlock()
 
-	h.sendTypes(conn, dts)
+	_ = h.sendTypes(conn, dts)
 
 	for {
 		_, _, err := conn.ReadMessage()
@@ -110,12 +110,12 @@ func (h *Handler) handleTypes(w http.ResponseWriter, _ *http.Request) {
 	h.mu.RUnlock()
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]string{"types": dts})
+	_ = json.NewEncoder(w).Encode(map[string]string{"types": dts})
 }
 
 func (h *Handler) handleClientScript(w http.ResponseWriter, _ *http.Request) {
 	w.Header().Set("Content-Type", "application/javascript")
-	w.Write([]byte(ClientScript()))
+	_, _ = w.Write([]byte(ClientScript()))
 }
 
 func (h *Handler) sendTypes(conn *websocket.Conn, dts string) error {

@@ -12,7 +12,7 @@ func TestNew(t *testing.T) {
 	if executor == nil {
 		t.Fatal("expected executor")
 	}
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 }
 
 func TestNewWithOptions(t *testing.T) {
@@ -24,7 +24,7 @@ func TestNewWithOptions(t *testing.T) {
 		WithSourceMaps(true),
 		WithPoolSize(4),
 	)
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	if executor.config.Engine != EngineGOJA {
 		t.Errorf("expected engine GOJA, got %v", executor.config.Engine)
@@ -36,7 +36,7 @@ func TestNewWithOptions(t *testing.T) {
 
 func TestExecute_SimpleExpression(t *testing.T) {
 	executor := New(WithEngine(EngineGOJA))
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	ctx := context.Background()
 	result, err := executor.Execute(ctx, `1 + 2`)
@@ -54,7 +54,7 @@ func TestExecute_WithGlobals(t *testing.T) {
 		WithEngine(EngineGOJA),
 		WithGlobals(map[string]any{"multiplier": 10}),
 	)
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	ctx := context.Background()
 	result, err := executor.Execute(ctx, `5 * multiplier`)
@@ -77,7 +77,7 @@ func TestExecute_WithGlobals(t *testing.T) {
 
 func TestExecute_TypeScript(t *testing.T) {
 	executor := New(WithEngine(EngineGOJA))
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	ctx := context.Background()
 	result, err := executor.Execute(ctx, `
@@ -103,7 +103,7 @@ func TestExecute_SecurityRestriction(t *testing.T) {
 			RestrictedGlobals: []string{"eval"},
 		}),
 	)
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	ctx := context.Background()
 	_, err := executor.Execute(ctx, `eval("1 + 1")`)
@@ -223,7 +223,7 @@ func TestMonacoClientScript(t *testing.T) {
 
 func TestExecute_ComparisonExpression(t *testing.T) {
 	executor := New(WithEngine(EngineGOJA))
-	defer executor.Close()
+	defer func() { _ = executor.Close() }()
 
 	tests := []struct {
 		name     string

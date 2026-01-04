@@ -311,7 +311,7 @@ var testCases = map[string]testCase{
 func BenchmarkGOJA(b *testing.B) {
 	trans := transpiler.New()
 	engine := goja.New(goja.Config{PoolSize: 8})
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	ctx := context.Background()
 
@@ -348,7 +348,7 @@ func BenchmarkBun(b *testing.B) {
 	if err != nil {
 		b.Fatalf("failed to create engine: %v", err)
 	}
-	defer engine.Close()
+	defer func() { _ = engine.Close() }()
 
 	if !engine.IsAvailable() {
 		b.Skip("Bun engine is not available")
@@ -373,7 +373,7 @@ func BenchmarkBun(b *testing.B) {
 func BenchmarkConcurrent(b *testing.B) {
 	trans := transpiler.New()
 	gojaEngine := goja.New(goja.Config{PoolSize: 16})
-	defer gojaEngine.Close()
+	defer func() { _ = gojaEngine.Close() }()
 
 	ctx := context.Background()
 	code := testCases["array_operations"].code
@@ -406,7 +406,7 @@ func BenchmarkConcurrent(b *testing.B) {
 	if _, err := exec.LookPath("bun"); err == nil {
 		bunEngine, err := bun.New(bun.Config{PoolSize: 8})
 		if err == nil && bunEngine.IsAvailable() {
-			defer bunEngine.Close()
+			defer func() { _ = bunEngine.Close() }()
 
 			for _, level := range concurrencyLevels {
 				b.Run(fmt.Sprintf("Bun_concurrent_%d", level), func(b *testing.B) {
@@ -454,7 +454,7 @@ func BenchmarkTranspiler(b *testing.B) {
 		})
 
 		// Warm the cache for cached benchmark
-		transWithCache.Transpile(tc.code)
+		_, _, _ = transWithCache.Transpile(tc.code)
 		b.Run("Transpile_Cached_"+id, func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
@@ -472,7 +472,7 @@ func TestFeatureSupport(t *testing.T) {
 	trans := transpiler.New()
 
 	gojaEngine := goja.New(goja.Config{PoolSize: 4})
-	defer gojaEngine.Close()
+	defer func() { _ = gojaEngine.Close() }()
 
 	var bunEngine *bun.Engine
 	hasBun := false
@@ -480,7 +480,7 @@ func TestFeatureSupport(t *testing.T) {
 		bunEngine, err = bun.New(bun.Config{PoolSize: 2})
 		if err == nil && bunEngine.IsAvailable() {
 			hasBun = true
-			defer bunEngine.Close()
+			defer func() { _ = bunEngine.Close() }()
 		}
 	}
 
@@ -530,7 +530,7 @@ func TestPerformanceComparison(t *testing.T) {
 	trans := transpiler.New()
 
 	gojaEngine := goja.New(goja.Config{PoolSize: 8})
-	defer gojaEngine.Close()
+	defer func() { _ = gojaEngine.Close() }()
 
 	var bunEngine *bun.Engine
 	hasBun := false
@@ -538,7 +538,7 @@ func TestPerformanceComparison(t *testing.T) {
 		bunEngine, err = bun.New(bun.Config{PoolSize: 4})
 		if err == nil && bunEngine.IsAvailable() {
 			hasBun = true
-			defer bunEngine.Close()
+			defer func() { _ = bunEngine.Close() }()
 		}
 	}
 
@@ -606,7 +606,7 @@ func TestConcurrencyScaling(t *testing.T) {
 	trans := transpiler.New()
 
 	gojaEngine := goja.New(goja.Config{PoolSize: 32})
-	defer gojaEngine.Close()
+	defer func() { _ = gojaEngine.Close() }()
 
 	ctx := context.Background()
 	code := testCases["nested_loops"].code
@@ -662,13 +662,13 @@ func BenchmarkColdStart(b *testing.B) {
 			if err != nil {
 				b.Fatalf("execution error: %v", err)
 			}
-			engine.Close()
+			_ = engine.Close()
 		}
 	})
 
 	b.Run("GOJA_warm_reuse", func(b *testing.B) {
 		engine := goja.New(goja.Config{PoolSize: 1})
-		defer engine.Close()
+		defer func() { _ = engine.Close() }()
 		ctx := context.Background()
 
 		b.ResetTimer()
@@ -701,7 +701,7 @@ func BenchmarkColdStart(b *testing.B) {
 			if err != nil {
 				b.Fatalf("execution error: %v", err)
 			}
-			engine.Close()
+			_ = engine.Close()
 		}
 	})
 
@@ -713,7 +713,7 @@ func BenchmarkColdStart(b *testing.B) {
 		if !engine.IsAvailable() {
 			b.Skip("Bun not available")
 		}
-		defer engine.Close()
+		defer func() { _ = engine.Close() }()
 
 		b.ResetTimer()
 		for i := 0; i < b.N; i++ {
@@ -747,7 +747,7 @@ func BenchmarkColdStart(b *testing.B) {
 			if err != nil {
 				b.Fatalf("execution error: %v", err)
 			}
-			engine.Close()
+			_ = engine.Close()
 		}
 	})
 
@@ -762,9 +762,9 @@ func BenchmarkColdStart(b *testing.B) {
 			time.Sleep(50 * time.Millisecond)
 			// Execute
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			engine.Execute(ctx, code, nil)
+			_, _ = engine.Execute(ctx, code, nil)
 			cancel()
-			engine.Close()
+			_ = engine.Close()
 		}
 	})
 
@@ -780,9 +780,9 @@ func BenchmarkColdStart(b *testing.B) {
 			time.Sleep(50 * time.Millisecond)
 			// Execute - process may already be ready!
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			engine.Execute(ctx, code, nil)
+			_, _ = engine.Execute(ctx, code, nil)
 			cancel()
-			engine.Close()
+			_ = engine.Close()
 		}
 	})
 }

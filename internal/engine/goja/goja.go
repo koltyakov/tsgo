@@ -324,19 +324,19 @@ func createRuntime() *goja.Runtime {
 
 	// Set up console
 	console := runtime.NewObject()
-	console.Set("log", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("log", func(call goja.FunctionCall) goja.Value {
 		return goja.Undefined()
 	})
-	console.Set("error", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("error", func(call goja.FunctionCall) goja.Value {
 		return goja.Undefined()
 	})
-	console.Set("warn", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("warn", func(call goja.FunctionCall) goja.Value {
 		return goja.Undefined()
 	})
-	console.Set("info", func(call goja.FunctionCall) goja.Value {
+	_ = console.Set("info", func(call goja.FunctionCall) goja.Value {
 		return goja.Undefined()
 	})
-	runtime.Set("console", console)
+	_ = runtime.Set("console", console)
 
 	// Set undefined for globals that don't exist in GOJA
 	undefinedGlobals := []string{
@@ -346,7 +346,7 @@ func createRuntime() *goja.Runtime {
 		"__dirname", "__filename",
 	}
 	for _, name := range undefinedGlobals {
-		runtime.Set(name, goja.Undefined())
+		_ = runtime.Set(name, goja.Undefined())
 	}
 
 	return runtime
@@ -376,7 +376,7 @@ func clearRuntime(pr *pooledRuntime) {
 	// Use a set to track what we've already cleared
 	cleared := make(map[string]struct{}, len(userGlobals))
 	for _, name := range userGlobals {
-		pr.runtime.Set(name, goja.Undefined())
+		_ = pr.runtime.Set(name, goja.Undefined())
 		cleared[name] = struct{}{}
 	}
 
@@ -389,7 +389,7 @@ func clearRuntime(pr *pooledRuntime) {
 			continue
 		}
 		if _, isBase := pr.baseGlobals[key]; !isBase {
-			pr.runtime.Set(key, goja.Undefined())
+			_ = pr.runtime.Set(key, goja.Undefined())
 		}
 	}
 }

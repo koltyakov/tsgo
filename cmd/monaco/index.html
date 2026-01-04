@@ -12,6 +12,24 @@
   <header>
     <h1>tsgo TypeScript Playground</h1>
     <div class="toolbar">
+      <select class="sample-select" id="sample-select" title="Load a sample">
+        <optgroup label="Basic">
+          <option value="hello-world" selected>Hello World</option>
+          <option value="fibonacci">Fibonacci Sequence</option>
+        </optgroup>
+        <optgroup label="Intermediate">
+          <option value="data-transform">Data Transformation</option>
+          <option value="validation">Input Validation</option>
+        </optgroup>
+        <optgroup label="Advanced">
+          <option value="state-machine">State Machine</option>
+          <option value="rule-engine">Business Rules Engine</option>
+        </optgroup>
+        <optgroup label="Bun Only (Async)">
+          <option value="async-fetch">Async HTTP Fetch</option>
+          <option value="parallel-tasks">Parallel Tasks</option>
+        </optgroup>
+      </select>
       <select class="engine-select" id="engine-select">
         <option value="auto" selected>Auto (Recommended)</option>
         <option value="goja">GOJA (Pure Go)</option>
@@ -21,8 +39,8 @@
         ▶ Run <span class="kbd">⌘↵</span>
       </button>
       <div class="status">
-        <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">Disconnected</span>
+        <span class="status-dot" id="ws-status" title="Disconnected"></span>
+        <span id="ws-text">Connecting...</span>
       </div>
     </div>
   </header>
@@ -32,8 +50,8 @@
       <aside id="types-panel">
         <div class="resize-handle-h" id="types-resize"></div>
         <div class="aside-top">
-          <div class="panel-header">Type Definitions</div>
-          <div id="types-preview">Loading types...</div>
+          <div class="panel-header">Context Types</div>
+          <div id="types-preview">// Loading sample...</div>
         </div>
         <div class="aside-bottom" id="contract-panel">
           <div class="resize-handle-v" id="contract-resize"></div>
@@ -49,7 +67,7 @@
     <div class="output-panel" id="output-panel">
       <div class="resize-handle-v" id="output-resize"></div>
       <div class="output-header">
-        <span>Output</span>
+        <span>Output <span class="output-status" id="output-status"></span></span>
         <span class="output-meta" id="output-meta"></span>
       </div>
       <div id="output">Click "Run" or press ⌘+Enter to execute the script</div>

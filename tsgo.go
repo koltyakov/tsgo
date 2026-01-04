@@ -200,19 +200,39 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 		}
 	}
 
+	// Select engine first (needed for transpilation format decision)
+	engineType := e.config.Engine
+	if engineType == EngineAuto {
+		engineType = e.selector.Select(code)
+	}
+
+	// Check for unsupported features when GOJA is explicitly configured
+	// (auto-selection would have chosen Bun if these features were detected)
+	hasTopLevelAwait := goja.ContainsTopLevelAwait(code)
+	if engineType == EngineGOJA {
+		unsupportedFeatures := goja.DetectUnsupportedFeatures(code)
+		if len(unsupportedFeatures) > 0 {
+			return nil, &ExecutionError{
+				Message: goja.FormatUnsupportedFeaturesError(unsupportedFeatures),
+				Code:    code,
+			}
+		}
+	}
+
 	// Transpile TypeScript to JavaScript
-	js, sourceMap, err := e.transpiler.Transpile(code)
+	// Use ESM format for Bun with top-level await (IIFE doesn't support it)
+	var js, sourceMap string
+	var err error
+	if engineType == EngineBun && hasTopLevelAwait {
+		js, sourceMap, err = e.transpiler.TranspileESM(code)
+	} else {
+		js, sourceMap, err = e.transpiler.Transpile(code)
+	}
 	if err != nil {
 		return nil, &ExecutionError{
 			Message: "transpilation failed: " + err.Error(),
 			Code:    code,
 		}
-	}
-
-	// Select engine
-	engineType := e.config.Engine
-	if engineType == EngineAuto {
-		engineType = e.selector.Select(code)
 	}
 
 	// Get or create engine
@@ -391,6 +411,9 @@ func NewTypeBuilder() *TypeBuilder {
 func GenerateContextTypes(globals map[string]any) string {
 	return typegen.GenerateContextDTS(globals)
 }
+
+// UnsupportedFeature represents a feature not supported by GOJA engine.
+type UnsupportedFeature = goja.UnsupportedFeature
 
 // --- Monaco Integration ---
 
