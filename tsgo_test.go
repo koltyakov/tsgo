@@ -236,8 +236,9 @@ func TestAnalyzeContract(t *testing.T) {
 		t.Fatal("expected type in contract")
 	}
 
-	if contract.Type.Name != "User" {
-		t.Errorf("expected User type, got %s", contract.Type.Name)
+	// Type should be expanded to structural form
+	if contract.Type.Name != "{ id: number; name: string; }" {
+		t.Errorf("expected expanded type, got %s", contract.Type.Name)
 	}
 
 	// Test TypeScript generation

@@ -39,6 +39,7 @@ import (
 	"github.com/koltyakov/tsgo/internal/sourcemap"
 	"github.com/koltyakov/tsgo/internal/transpiler"
 	"github.com/koltyakov/tsgo/internal/typegen"
+	"github.com/koltyakov/tsgo/internal/typeinfer"
 	"github.com/koltyakov/tsgo/internal/types"
 )
 
@@ -469,9 +470,32 @@ func NewContractAnalyzer() *ContractAnalyzer {
 	return contract.NewAnalyzer()
 }
 
+// --- Type Inference ---
+
+// TypeInferrer provides TypeScript type inference using the TS Compiler API.
+// It requires Bun to be installed for accurate type inference.
+type TypeInferrer = typeinfer.Inferrer
+
+// InferenceResult represents the result of type inference.
+type InferenceResult = typeinfer.InferenceResult
+
+// NewTypeInferrer creates a new TypeScript type inferrer.
+// Returns nil if Bun is not available.
+func NewTypeInferrer() *TypeInferrer {
+	if !typeinfer.IsBunAvailable() {
+		return nil
+	}
+	return typeinfer.NewInferrer()
+}
+
+// IsBunAvailable checks if Bun runtime is available for TypeScript inference.
+func IsBunAvailable() bool {
+	return typeinfer.IsBunAvailable()
+}
+
 // AnalyzeContract extracts the contract definition from TypeScript code.
-// It parses interfaces, type aliases, and the default export to determine
-// the shape of the script's output.
+// It uses the TypeScript Compiler API via Bun for accurate type inference
+// when available, falling back to the Go-based regex analyzer otherwise.
 //
 // Example:
 //
@@ -487,5 +511,58 @@ func NewContractAnalyzer() *ContractAnalyzer {
 //	// contract.ToTypeScript() returns TypeScript type definition
 //	// contract.ToJSONSchema() returns JSON Schema
 func AnalyzeContract(code string) (*Contract, error) {
+	return AnalyzeContractWithContext(context.Background(), code)
+}
+
+// AnalyzeContractWithContext extracts the contract definition from TypeScript code
+// with a context for cancellation/timeout support.
+func AnalyzeContractWithContext(ctx context.Context, code string) (*Contract, error) {
+	// Try TypeScript Compiler API first (more accurate) if Bun is available
+	if typeinfer.IsBunAvailable() {
+		inferrer := typeinfer.NewInferrer()
+		result, err := inferrer.InferDefaultExport(ctx, code)
+		if err == nil && result.Error == "" {
+			// Convert inference result to Contract
+			return inferenceResultToContract(result), nil
+		}
+		// Fall through to Go-based analyzer on error
+	}
+
+	// Fallback: Use Go-based regex analyzer
 	return contract.NewAnalyzer().Analyze(code)
+}
+
+// InferenceResultToContract converts a TypeInferrer result to a Contract.
+// This is useful when you want to use the Contract API methods like ToTypeScript()
+// or ToJSONSchema() with an inference result.
+func InferenceResultToContract(result *InferenceResult) *Contract {
+	return inferenceResultToContract(result)
+}
+
+// inferenceResultToContract converts a TypeInferrer result to a Contract
+func inferenceResultToContract(result *typeinfer.InferenceResult) *Contract {
+	typeDef := contract.ParseTypeString(result.Type, result.Kind)
+
+	// If properties are provided, use them (more accurate)
+	if len(result.Properties) > 0 && typeDef.Kind == "object" {
+		typeDef.Properties = nil
+		for _, prop := range result.Properties {
+			propTypeDef := contract.ParseTypeString(prop.Type, "")
+			typeDef.Properties = append(typeDef.Properties, contract.Property{
+				Name:     prop.Name,
+				Type:     propTypeDef,
+				Required: !prop.Optional,
+			})
+		}
+	}
+
+	// Set element type for arrays
+	if result.ElementType != "" {
+		typeDef.ElementType = contract.ParseTypeString(result.ElementType, "")
+	}
+
+	return &Contract{
+		Name: "Result",
+		Type: typeDef,
+	}
 }

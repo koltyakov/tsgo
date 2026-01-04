@@ -13,9 +13,6 @@ import (
 	"time"
 
 	"github.com/koltyakov/tsgo"
-	"github.com/koltyakov/tsgo/internal/contract"
-	"github.com/koltyakov/tsgo/internal/monaco"
-	"github.com/koltyakov/tsgo/internal/typegen"
 )
 
 //go:embed index.html styles.css app.js samples.json samples/*.ts
@@ -118,12 +115,12 @@ func main() {
 	initExecutors()
 
 	// Create Monaco handler (no default types - loaded per sample)
-	handler := monaco.NewHandler()
-	builder := typegen.NewBuilder()
+	handler := tsgo.NewMonacoHandler()
+	builder := tsgo.NewTypeBuilder()
 	handler.SetTypes(builder)
 
 	// Create contract analyzer (no default types - types come from context)
-	contractAnalyzer := contract.NewAnalyzer()
+	contractAnalyzer := tsgo.NewContractAnalyzer()
 
 	// Serve static files
 	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -193,6 +190,15 @@ func main() {
 		})
 	})
 
+	// Type inferrer using TypeScript Compiler API (more accurate)
+	typeInferrer := tsgo.NewTypeInferrer()
+	useTSInferrer := tsgo.IsBunAvailable()
+	if useTSInferrer {
+		log.Println("TypeScript type inferrer enabled (Bun available)")
+	} else {
+		log.Println("TypeScript type inferrer disabled (Bun not found), using Go-based analyzer")
+	}
+
 	// Contract generation endpoint
 	http.HandleFunc("/contract", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -215,9 +221,32 @@ func main() {
 			fullCode = req.ContextCode + "\n\n" + req.Code
 		}
 
-		c, err := contractAnalyzer.Analyze(fullCode)
-
 		w.Header().Set("Content-Type", "application/json")
+
+		// Try TypeScript Compiler API first (more accurate)
+		if useTSInferrer {
+			ctx := context.Background()
+			inferResult, err := typeInferrer.InferDefaultExport(ctx, fullCode)
+			if err == nil && inferResult.Error == "" {
+				// Convert inference result to Contract for proper formatting
+				c := tsgo.InferenceResultToContract(inferResult)
+				tsDef := c.ToTypeScript()
+				jsonSchema, _ := c.ToJSONSchemaJSON()
+
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"typescript": tsDef,
+					"jsonSchema": string(jsonSchema),
+					"contract":   fmt.Sprintf(`{"type":"%s","kind":"%s"}`, inferResult.Type, inferResult.Kind),
+					"inferrer":   "typescript",
+				})
+				return
+			}
+			// Fall through to Go-based analyzer on error
+			log.Printf("TS inferrer error (falling back to Go): %v", err)
+		}
+
+		// Fallback: Use Go-based regex analyzer
+		c, err := contractAnalyzer.Analyze(fullCode)
 		if err != nil {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"error": err.Error(),
@@ -233,6 +262,7 @@ func main() {
 			"typescript": tsDef,
 			"jsonSchema": string(jsonSchema),
 			"contract":   string(contractJSON),
+			"inferrer":   "go",
 		})
 	})
 
@@ -281,4 +311,90 @@ func main() {
 	fmt.Println("\nPress Ctrl+C to stop")
 
 	log.Fatal(http.ListenAndServe(addr, nil))
+}
+
+// buildTypeScriptFromInference creates a TypeScript type definition from inference result
+func buildTypeScriptFromInference(result *tsgo.InferenceResult) string {
+	if result.Type == "" {
+		return "// Contract definition\nexport type Result = any;\n"
+	}
+
+	switch result.Kind {
+	case "primitive", "literal":
+		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
+	case "object":
+		if len(result.Properties) > 0 {
+			var props []string
+			for _, prop := range result.Properties {
+				opt := ""
+				if prop.Optional {
+					opt = "?"
+				}
+				props = append(props, fmt.Sprintf("  %s%s: %s;", prop.Name, opt, prop.Type))
+			}
+			return fmt.Sprintf("// Contract definition\nexport type Result = {\n%s\n};\n", strings.Join(props, "\n"))
+		}
+		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
+	case "array":
+		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
+	case "function":
+		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
+	default:
+		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
+	}
+}
+
+// buildJSONSchemaFromInference creates a JSON Schema from inference result
+func buildJSONSchemaFromInference(result *tsgo.InferenceResult) string {
+	schema := map[string]any{
+		"$schema": "http://json-schema.org/draft-07/schema#",
+	}
+
+	switch result.Kind {
+	case "primitive":
+		schema["type"] = tsToJSONSchemaType(result.Type)
+	case "object":
+		schema["type"] = "object"
+		if len(result.Properties) > 0 {
+			props := make(map[string]any)
+			for _, prop := range result.Properties {
+				props[prop.Name] = map[string]any{
+					"type": tsToJSONSchemaType(prop.Type),
+				}
+			}
+			schema["properties"] = props
+		}
+	case "array":
+		schema["type"] = "array"
+	case "function":
+		// Functions don't map well to JSON Schema
+		schema["type"] = "object"
+		schema["description"] = result.Type
+	default:
+		schema["type"] = "object"
+	}
+
+	jsonBytes, _ := json.Marshal(schema)
+	return string(jsonBytes)
+}
+
+// tsToJSONSchemaType converts TypeScript types to JSON Schema types
+func tsToJSONSchemaType(tsType string) string {
+	switch tsType {
+	case "string":
+		return "string"
+	case "number", "bigint":
+		return "number"
+	case "boolean":
+		return "boolean"
+	case "null":
+		return "null"
+	case "undefined":
+		return "null"
+	default:
+		if strings.HasSuffix(tsType, "[]") {
+			return "array"
+		}
+		return "object"
+	}
 }
