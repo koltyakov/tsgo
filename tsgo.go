@@ -24,6 +24,7 @@ package tsgo
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -56,6 +57,10 @@ type (
 
 	// SecurityPolicy defines security restrictions for script execution.
 	SecurityPolicy = types.SecurityPolicy
+
+	// FunctionDef defines a function injectable into the script context.
+	// It provides both Go (for GOJA) and TypeScript (for Bun) implementations.
+	FunctionDef = types.FunctionDef
 )
 
 // Engine type constants
@@ -112,6 +117,15 @@ func WithMemoryLimit(bytes int64) Option {
 func WithGlobals(globals map[string]any) Option {
 	return func(c *types.ExecutorConfig) {
 		c.Globals = globals
+	}
+}
+
+// WithFunctions sets the callable functions available to scripts.
+// Each function must provide both a Go implementation (for GOJA) and
+// TypeScript code (for Bun engine).
+func WithFunctions(functions map[string]types.FunctionDef) Option {
+	return func(c *types.ExecutorConfig) {
+		c.Functions = functions
 	}
 }
 
@@ -214,8 +228,39 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 		defer cancel()
 	}
 
+	// Prepare globals and functions for execution
+	globals := e.config.Globals
+	jsToExecute := js
+
+	// Inject functions based on engine type
+	if len(e.config.Functions) > 0 {
+		if engineType == EngineGOJA {
+			// For GOJA: merge Go functions into globals
+			merged := make(map[string]any, len(globals)+len(e.config.Functions))
+			for k, v := range globals {
+				merged[k] = v
+			}
+			for name, fn := range e.config.Functions {
+				merged[name] = fn.GoFunc
+			}
+			globals = merged
+		} else {
+			// For Bun: prepend TypeScript function definitions
+			var prelude strings.Builder
+			for _, fn := range e.config.Functions {
+				if fn.TSCode != "" {
+					prelude.WriteString(fn.TSCode)
+					prelude.WriteByte('\n')
+				}
+			}
+			if prelude.Len() > 0 {
+				jsToExecute = prelude.String() + jsToExecute
+			}
+		}
+	}
+
 	// Execute
-	result, err := eng.Execute(execCtx, js, e.config.Globals)
+	result, err := eng.Execute(execCtx, jsToExecute, globals)
 	if err != nil {
 		// Map error through source map if available
 		if sourceMap != "" && e.config.SourceMaps {

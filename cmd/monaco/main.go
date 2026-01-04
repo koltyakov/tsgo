@@ -35,6 +35,24 @@ var globals = map[string]any{
 	},
 }
 
+// Functions available to scripts
+var functions = map[string]tsgo.FunctionDef{
+	"sum": {
+		// Go implementation for GOJA
+		GoFunc: func(x, y float64) float64 {
+			return x + y
+		},
+		// TypeScript implementation for Bun
+		TSCode: "function sum(x, y) { return x + y; }",
+	},
+	"multiply": {
+		GoFunc: func(x, y float64) float64 {
+			return x * y
+		},
+		TSCode: "function multiply(x, y) { return x * y; }",
+	},
+}
+
 // Shared executors - reused across requests for performance
 var (
 	autoExec *tsgo.Executor
@@ -51,6 +69,7 @@ func initExecutors() {
 			tsgo.WithEngine(tsgo.EngineAuto),
 			tsgo.WithTimeout(5*time.Second),
 			tsgo.WithGlobals(globals),
+			tsgo.WithFunctions(functions),
 		)
 
 		// Create GOJA executor (always available)
@@ -58,6 +77,7 @@ func initExecutors() {
 			tsgo.WithEngine(tsgo.EngineGOJA),
 			tsgo.WithTimeout(5*time.Second),
 			tsgo.WithGlobals(globals),
+			tsgo.WithFunctions(functions),
 		)
 
 		// Create Bun executor (may not be available)
@@ -65,6 +85,7 @@ func initExecutors() {
 			tsgo.WithEngine(tsgo.EngineBun),
 			tsgo.WithTimeout(5*time.Second),
 			tsgo.WithGlobals(globals),
+			tsgo.WithFunctions(functions),
 		)
 
 		// Prewarm engines in background
@@ -138,6 +159,10 @@ func main() {
 	})
 	builder.AddGlobal("currentUser", "User")
 	builder.AddGlobal("config", "Config")
+
+	// Add function declarations for IntelliSense
+	builder.AddFunction("sum", "x: number, y: number", "number", "Adds two numbers together")
+	builder.AddFunction("multiply", "x: number, y: number", "number", "Multiplies two numbers")
 
 	handler.SetTypes(builder)
 

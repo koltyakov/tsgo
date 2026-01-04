@@ -11,6 +11,10 @@ if (config.debug) {
   console.log(\`API URL: \${config.apiUrl}\`);
 }
 
+// Use injected helper functions (work in both GOJA and Bun!)
+const total = sum(10, 20);
+const product = multiply(5, 6);
+
 // Create a new user object
 const newUser: User = {
   id: 2,
@@ -32,7 +36,9 @@ export default {
   greeting,
   newUser,
   fib10,
-  userRole: user.role
+  userRole: user.role,
+  // Show the injected function results
+  mathResults: { sum: total, product }
 };
 `;
 
@@ -102,8 +108,11 @@ function connectWebSocket() {
         data.types,
         'file:///node_modules/@types/tsgo/index.d.ts'
       );
-      // Update preview
-      document.getElementById('types-preview').textContent = data.types;
+      // Update preview with syntax highlighting
+      const typesPreview = document.getElementById('types-preview');
+      typesPreview.textContent = data.types;
+      typesPreview.setAttribute('data-lang', 'typescript');
+      monaco.editor.colorizeElement(typesPreview, { theme: 'vs-dark' });
     }
   };
 }
@@ -272,10 +281,38 @@ function validateForEngine() {
 }
 
 function initResizablePanels() {
+  const PANEL_SIZES_KEY = 'tsgo-playground-panels';
+
+  // Load saved panel sizes
+  function loadPanelSizes() {
+    try {
+      const saved = localStorage.getItem(PANEL_SIZES_KEY);
+      return saved ? JSON.parse(saved) : {};
+    } catch (e) {
+      return {};
+    }
+  }
+
+  // Save panel sizes
+  function savePanelSizes(sizes) {
+    try {
+      const current = loadPanelSizes();
+      localStorage.setItem(PANEL_SIZES_KEY, JSON.stringify({ ...current, ...sizes }));
+    } catch (e) {
+      // Ignore storage errors
+    }
+  }
+
   // Horizontal resize for types panel
   const typesPanel = document.getElementById('types-panel');
   const typesResize = document.getElementById('types-resize');
   let isResizingH = false;
+
+  // Restore saved sizes
+  const savedSizes = loadPanelSizes();
+  if (savedSizes.typesWidth) typesPanel.style.width = savedSizes.typesWidth + 'px';
+  if (savedSizes.outputHeight) document.getElementById('output-panel').style.height = savedSizes.outputHeight + 'px';
+  if (savedSizes.contractHeight) document.getElementById('contract-panel').style.height = savedSizes.contractHeight + 'px';
 
   typesResize.addEventListener('mousedown', (e) => {
     isResizingH = true;
@@ -341,18 +378,21 @@ function initResizablePanels() {
       typesResize.classList.remove('dragging');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      savePanelSizes({ typesWidth: parseInt(typesPanel.style.width) });
     }
     if (isResizingV) {
       isResizingV = false;
       outputResize.classList.remove('dragging');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      savePanelSizes({ outputHeight: parseInt(outputPanel.style.height) });
     }
     if (isResizingContract) {
       isResizingContract = false;
       contractResize.classList.remove('dragging');
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
+      savePanelSizes({ contractHeight: parseInt(contractPanel.style.height) });
     }
   });
 }
@@ -380,9 +420,15 @@ function initContractGeneration() {
     if (currentTab === 'typescript') {
       contractContent.className = 'typescript';
       contractContent.textContent = currentContract.typescript || '// No contract generated';
+      contractContent.setAttribute('data-lang', 'typescript');
     } else {
       contractContent.className = 'json';
       contractContent.textContent = currentContract.jsonSchema || '// No schema generated';
+      contractContent.setAttribute('data-lang', 'json');
+    }
+    // Apply syntax highlighting
+    if (monaco) {
+      monaco.editor.colorizeElement(contractContent, { theme: 'vs-dark' });
     }
   }
 

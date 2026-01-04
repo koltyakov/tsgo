@@ -62,6 +62,17 @@ func DefaultSecurityPolicy() SecurityPolicy {
 	}
 }
 
+// FunctionDef defines a function that can be injected into the script execution context.
+// It provides both a Go implementation (for GOJA) and TypeScript code (for Bun).
+type FunctionDef struct {
+	// GoFunc is the Go function implementation used by GOJA engine.
+	// The function signature should match the TypeScript signature.
+	GoFunc any
+	// TSCode is the TypeScript/JavaScript implementation used by Bun engine.
+	// Example: "function sum(x, y) { return x + y; }"
+	TSCode string
+}
+
 // ExecutorConfig configures the TypeScript executor.
 type ExecutorConfig struct {
 	// Engine specifies which engine to use (EngineAuto for automatic selection).
@@ -72,6 +83,9 @@ type ExecutorConfig struct {
 	MemoryLimit int64
 	// Globals are variables injected into the global scope.
 	Globals map[string]any
+	// Functions are callable functions injected into the global scope.
+	// Use this for helper functions that scripts can call.
+	Functions map[string]FunctionDef
 	// Security defines the security policy for execution.
 	Security SecurityPolicy
 	// SourceMaps enables source map generation for error traces.

@@ -165,12 +165,19 @@ func (b *Builder) Build() string {
 		sb.WriteString(";\n")
 	}
 
-	// Functions
-	for _, fn := range b.functions {
-		lines := strings.Split(fn, "\n")
-		for _, line := range lines {
+	// Functions (with blank line separator if there are globals)
+	if len(b.globals) > 0 && len(b.functions) > 0 {
+		sb.WriteByte('\n')
+	}
+	for i, fn := range b.functions {
+		lines := strings.SplitSeq(fn, "\n")
+		for line := range lines {
 			sb.WriteString("  ")
 			sb.WriteString(line)
+			sb.WriteByte('\n')
+		}
+		// Add blank line after each function except the last
+		if i < len(b.functions)-1 {
 			sb.WriteByte('\n')
 		}
 	}

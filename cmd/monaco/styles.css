@@ -184,8 +184,42 @@ aside {
   font-size: 11px;
   line-height: 1.5;
   overflow: auto;
-  white-space: pre-wrap;
-  color: #9cdcfe;
+  white-space: pre;
+  color: #d4d4d4;
+  background: #1e1e1e;
+}
+
+/* Dark scrollbars for panels */
+#types-preview::-webkit-scrollbar,
+#contract-content::-webkit-scrollbar,
+#output::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+#types-preview::-webkit-scrollbar-track,
+#contract-content::-webkit-scrollbar-track,
+#output::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+#types-preview::-webkit-scrollbar-thumb,
+#contract-content::-webkit-scrollbar-thumb,
+#output::-webkit-scrollbar-thumb {
+  background: #424242;
+  border-radius: 5px;
+}
+
+#types-preview::-webkit-scrollbar-thumb:hover,
+#contract-content::-webkit-scrollbar-thumb:hover,
+#output::-webkit-scrollbar-thumb:hover {
+  background: #555;
+}
+
+#types-preview::-webkit-scrollbar-corner,
+#contract-content::-webkit-scrollbar-corner,
+#output::-webkit-scrollbar-corner {
+  background: #1e1e1e;
 }
 
 .contract-tabs {
@@ -221,16 +255,9 @@ aside {
   font-size: 10px;
   line-height: 1.4;
   overflow: auto;
-  white-space: pre-wrap;
-  color: #9cdcfe;
-}
-
-#contract-content.typescript {
-  color: #9cdcfe;
-}
-
-#contract-content.json {
-  color: #ce9178;
+  white-space: pre;
+  color: #d4d4d4;
+  background: #1e1e1e;
 }
 
 .contract-status {
@@ -279,7 +306,7 @@ aside {
   font-size: 12px;
   line-height: 1.5;
   overflow: auto;
-  white-space: pre-wrap;
+  white-space: pre;
 }
 
 #output.error {

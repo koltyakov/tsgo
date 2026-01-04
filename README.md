@@ -186,12 +186,42 @@ tsgo.New(
   tsgo.WithTimeout(10*time.Second),      // Execution timeout
   tsgo.WithMemoryLimit(64*1024*1024),    // Memory limit (64MB)
   tsgo.WithGlobals(map[string]any{...}), // Global variables
+  tsgo.WithFunctions(map[string]tsgo.FunctionDef{...}), // Helper functions
   tsgo.WithSecurity(tsgo.SecurityPolicy{
     RestrictedGlobals: []string{"eval", "Function"},
   }),
   tsgo.WithSourceMaps(true),             // Enable source maps
   tsgo.WithPoolSize(4),                  // Worker pool size
 )
+```
+
+### Injecting Functions
+
+You can inject Go functions that scripts can call. Each function requires both a Go implementation (for GOJA) and TypeScript code (for Bun):
+
+```go
+executor := tsgo.New(
+  tsgo.WithFunctions(map[string]tsgo.FunctionDef{
+    "sum": {
+      GoFunc: func(x, y float64) float64 { return x + y },
+      TSCode: "function sum(x, y) { return x + y; }",
+    },
+    "greet": {
+      GoFunc: func(name string) string { return "Hello, " + name },
+      TSCode: "function greet(name) { return 'Hello, ' + name; }",
+    },
+  }),
+)
+
+// Scripts can now call these functions:
+result, _ := executor.Execute(ctx, `export default sum(10, 20)`) // 30
+```
+
+For type-aware IntelliSense in Monaco, add function declarations to the type builder:
+
+```go
+builder := typegen.NewBuilder()
+builder.AddFunction("sum", "x: number, y: number", "number", "Adds two numbers")
 ```
 
 ## Script Results Interpretation
@@ -359,6 +389,16 @@ The demo provides typed globals you can use in your scripts:
 // Available globals with full type support
 const user: User = currentUser;  // { id, name, email, role }
 const cfg: Config = config;       // { apiUrl, timeout, debug }
+```
+
+### Injected Functions
+
+The demo also provides helper functions that work in both GOJA and Bun:
+
+```typescript
+// Available functions with full type support
+const total = sum(10, 20);       // 30
+const product = multiply(5, 6); // 30
 ```
 
 ## Project Structure
