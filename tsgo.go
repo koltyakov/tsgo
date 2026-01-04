@@ -24,6 +24,7 @@ package tsgo
 import (
 	"context"
 	"errors"
+	"maps"
 	"strings"
 	"sync"
 	"time"
@@ -230,6 +231,9 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 
 	// Prepare globals and functions for execution
 	globals := e.config.Globals
+	if globals == nil {
+		globals = make(map[string]any)
+	}
 	jsToExecute := js
 
 	// Inject functions based on engine type
@@ -237,11 +241,11 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 		if engineType == EngineGOJA {
 			// For GOJA: merge Go functions into globals
 			merged := make(map[string]any, len(globals)+len(e.config.Functions))
-			for k, v := range globals {
-				merged[k] = v
-			}
+			maps.Copy(merged, globals)
 			for name, fn := range e.config.Functions {
-				merged[name] = fn.GoFunc
+				if fn.GoFunc != nil {
+					merged[name] = fn.GoFunc
+				}
 			}
 			globals = merged
 		} else {
@@ -257,6 +261,11 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 				jsToExecute = prelude.String() + jsToExecute
 			}
 		}
+	}
+
+	// Final context check before execution
+	if err := execCtx.Err(); err != nil {
+		return nil, err
 	}
 
 	// Execute

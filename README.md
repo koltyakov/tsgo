@@ -182,7 +182,7 @@ See the [Benchmark Suite](internal/benchmark/README.md) for detailed comparison,
 
 ```go
 tsgo.New(
-  tsgo.WithEngine(tsgo.EngineGOJA),     // Engine selection
+  tsgo.WithEngine(tsgo.EngineGOJA),      // Engine selection
   tsgo.WithTimeout(10*time.Second),      // Execution timeout
   tsgo.WithMemoryLimit(64*1024*1024),    // Memory limit (64MB)
   tsgo.WithGlobals(map[string]any{...}), // Global variables
@@ -388,7 +388,7 @@ The demo provides typed globals you can use in your scripts:
 ```typescript
 // Available globals with full type support
 const user: User = currentUser;  // { id, name, email, role }
-const cfg: Config = config;       // { apiUrl, timeout, debug }
+const cfg: Config = config;      // { apiUrl, timeout, debug }
 ```
 
 ### Injected Functions
@@ -398,7 +398,7 @@ The demo also provides helper functions that work in both GOJA and Bun:
 ```typescript
 // Available functions with full type support
 const total = sum(10, 20);       // 30
-const product = multiply(5, 6); // 30
+const product = multiply(5, 6);  // 30
 ```
 
 ## Project Structure

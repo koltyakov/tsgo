@@ -3,6 +3,7 @@ package goja
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"runtime"
 	"strings"
@@ -12,6 +13,12 @@ import (
 
 	"github.com/dop251/goja"
 	"github.com/koltyakov/tsgo/internal/types"
+)
+
+// Sentinel errors for the GOJA engine.
+var (
+	// ErrPoolClosed is returned when trying to acquire from a closed pool.
+	ErrPoolClosed = errors.New("goja: pool is closed")
 )
 
 // Config configures the GOJA engine.
@@ -207,7 +214,7 @@ func newPool(size int) *pool {
 	}
 	p.cond = sync.NewCond(&p.mu)
 
-	for i := 0; i < size; i++ {
+	for i := range size {
 		p.runtimes[i] = &pooledRuntime{
 			runtime: createRuntime(),
 		}
@@ -218,22 +225,22 @@ func newPool(size int) *pool {
 
 func (p *pool) acquire(ctx context.Context) (*goja.Runtime, func(), error) {
 	if p.closed.Load() {
-		return nil, nil, fmt.Errorf("pool is closed")
+		return nil, nil, ErrPoolClosed
 	}
 
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
-	// Try to find a free runtime with exponential backoff
+	// Try to find a free runtime with timeout-based retry
 	for {
-		// Check context
+		// Check context first
 		if err := ctx.Err(); err != nil {
 			return nil, nil, err
 		}
 
 		// Check if pool was closed while waiting
 		if p.closed.Load() {
-			return nil, nil, fmt.Errorf("pool is closed")
+			return nil, nil, ErrPoolClosed
 		}
 
 		// Try to find a free runtime
@@ -248,29 +255,28 @@ func (p *pool) acquire(ctx context.Context) (*goja.Runtime, func(), error) {
 			}
 		}
 
-		// All runtimes busy - wait with timeout
-		// Use a timer instead of spawning goroutines to avoid leaks
-		waitDone := make(chan struct{})
-		timer := time.NewTimer(50 * time.Millisecond)
+		// All runtimes busy - wait with timeout using sync.Cond
+		// Create a done channel that the goroutine will check
+		done := make(chan struct{})
 
+		// Spawn a goroutine to wake us up on context cancellation or timeout
 		go func() {
+			timer := time.NewTimer(50 * time.Millisecond)
+			defer timer.Stop()
+
 			select {
 			case <-ctx.Done():
-				p.mu.Lock()
 				p.cond.Broadcast()
-				p.mu.Unlock()
 			case <-timer.C:
-				p.mu.Lock()
 				p.cond.Signal()
-				p.mu.Unlock()
-			case <-waitDone:
-				// Clean exit
+			case <-done:
+				// Parent returned, exit cleanly
+				return
 			}
 		}()
 
 		p.cond.Wait()
-		timer.Stop()
-		close(waitDone)
+		close(done) // Signal goroutine to exit
 	}
 }
 

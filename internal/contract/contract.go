@@ -752,9 +752,10 @@ func splitObjectProperties(body string) []string {
 		}
 
 		// Track nesting depth
-		if c == '{' || c == '[' || c == '(' {
+		switch c {
+		case '{', '[', '(':
 			depth++
-		} else if c == '}' || c == ']' || c == ')' {
+		case '}', ']', ')':
 			depth--
 		}
 
@@ -869,9 +870,10 @@ func extractTypeAnnotation(code string) string {
 		}
 
 		// Track depth for braces, brackets, parens
-		if c == '{' || c == '[' || c == '(' || c == '<' {
+		switch c {
+		case '{', '[', '(', '<':
 			depth++
-		} else if c == '}' || c == ']' || c == ')' || c == '>' {
+		case '}', ']', ')', '>':
 			depth--
 		}
 
@@ -912,9 +914,10 @@ func extractTypeUntilEquals(code string) string {
 		}
 
 		// Track depth for braces, brackets, parens
-		if c == '{' || c == '[' || c == '(' || c == '<' {
+		switch c {
+		case '{', '[', '(', '<':
 			depth++
-		} else if c == '}' || c == ']' || c == ')' || c == '>' {
+		case '}', ']', ')', '>':
 			depth--
 		}
 
