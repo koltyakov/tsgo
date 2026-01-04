@@ -25,6 +25,7 @@ function stripTripleSlashRefs(code) {
 const SAMPLE_ENGINES = {
   'async-fetch': 'bun',
   'parallel-tasks': 'bun',
+  'task-scheduler': 'bun',
 };
 
 // GOJA unsupported features patterns

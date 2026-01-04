@@ -43,6 +43,34 @@
       "engine": "auto"
     },
     {
+      "id": "json-validator",
+      "name": "JSON Schema Validator",
+      "description": "Recursive type validation with custom rules",
+      "category": "advanced",
+      "engine": "auto"
+    },
+    {
+      "id": "expression-parser",
+      "name": "Expression Parser",
+      "description": "Math expression lexer, parser, and evaluator",
+      "category": "advanced",
+      "engine": "auto"
+    },
+    {
+      "id": "event-emitter",
+      "name": "Event Emitter",
+      "description": "Type-safe observer pattern implementation",
+      "category": "advanced",
+      "engine": "auto"
+    },
+    {
+      "id": "template-engine",
+      "name": "Template Engine",
+      "description": "String interpolation with helpers and loops",
+      "category": "advanced",
+      "engine": "auto"
+    },
+    {
       "id": "async-fetch",
       "name": "Async HTTP Fetch",
       "description": "Fetch data from external API (Bun only)",
@@ -53,6 +81,13 @@
       "id": "parallel-tasks",
       "name": "Parallel Tasks",
       "description": "Concurrent async operations (Bun only)",
+      "category": "bun-only",
+      "engine": "bun"
+    },
+    {
+      "id": "task-scheduler",
+      "name": "Task Scheduler",
+      "description": "Async task queue with priorities and retries (Bun only)",
       "category": "bun-only",
       "engine": "bun"
     }
