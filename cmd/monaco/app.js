@@ -348,6 +348,9 @@ function initResizablePanels() {
   });
 }
 
+// Global reference for clearing contract from outside
+let clearContractDisplay = null;
+
 function initContractGeneration() {
   const contractContent = document.getElementById('contract-content');
   const contractStatus = document.getElementById('contract-status');
@@ -383,6 +386,14 @@ function initContractGeneration() {
     }
   }
 
+  // Expose clear function globally
+  clearContractDisplay = function() {
+    clearTimeout(debounceTimer);
+    currentContract = { typescript: '// Loading...', jsonSchema: '// Loading...' };
+    contractStatus.textContent = 'Loading sample...';
+    updateContractDisplay();
+  };
+
   async function generateContract() {
     if (!editor) return;
     
@@ -406,8 +417,9 @@ function initContractGeneration() {
           typescript: result.typescript || '// No types exported',
           jsonSchema: result.jsonSchema || '{}'
         };
-        const count = result.contract?.types?.length || 0;
-        contractStatus.textContent = `Generated ${count} type${count !== 1 ? 's' : ''}`;
+        // Show which inferrer was used
+        const inferrer = result.inferrer === 'typescript' ? 'TS Compiler' : 'Go Analyzer';
+        contractStatus.textContent = `Generated (${inferrer})`;
       }
       
       updateContractDisplay();
@@ -666,14 +678,23 @@ async function loadSample(sampleId) {
   const sampleSelect = document.getElementById('sample-select');
   const engineSelect = document.getElementById('engine-select');
   const output = document.getElementById('output');
+  const typesPreview = document.getElementById('types-preview');
   
-  // Clear the output panel when switching samples
-  output.textContent = '// Select a sample and click Run';
+  // Clear all panels immediately when switching samples
+  output.textContent = '// Loading sample...';
   output.className = '';
   document.querySelector('.output-meta').textContent = '';
   const outputStatus = document.getElementById('output-status');
   outputStatus.textContent = '';
   outputStatus.className = 'output-status';
+  
+  // Clear types preview
+  typesPreview.textContent = '// Loading context...';
+  
+  // Clear contract panel
+  if (clearContractDisplay) {
+    clearContractDisplay();
+  }
   
   try {
     // Fetch sample from the /sample/ endpoint which splits context and code

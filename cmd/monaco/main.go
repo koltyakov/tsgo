@@ -1,4 +1,4 @@
-// Monaco editor integration example
+// Monaco editor integration for tsgo TypeScript playground.
 package main
 
 import (
@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -18,57 +19,68 @@ import (
 //go:embed index.html styles.css app.js samples.json samples/*.ts
 var content embed.FS
 
-const codeSeparator = "// --- Code ---"
-
-// Shared executors - reused across requests for performance
-var (
-	autoExec *tsgo.Executor
-	gojaExec *tsgo.Executor
-	bunExec  *tsgo.Executor
-	execOnce sync.Once
-	execMu   sync.RWMutex
+// Configuration constants.
+const (
+	codeSeparator   = "// --- Code ---"
+	defaultAddr     = "localhost:8080"
+	executorTimeout = 5 * time.Second
+	warmupTimeout   = 10 * time.Second
 )
 
-func initExecutors() {
-	execOnce.Do(func() {
-		// Create executors without globals - context will be loaded per-sample
-		autoExec = tsgo.New(
+// MIME types for static file serving.
+var mimeTypes = map[string]string{
+	".html": "text/html; charset=utf-8",
+	".css":  "text/css; charset=utf-8",
+	".js":   "application/javascript; charset=utf-8",
+	".ts":   "text/plain; charset=utf-8",
+	".json": "application/json; charset=utf-8",
+}
+
+// executorPool manages shared executor instances.
+type executorPool struct {
+	auto *tsgo.Executor
+	goja *tsgo.Executor
+	bun  *tsgo.Executor
+	once sync.Once
+	mu   sync.RWMutex
+}
+
+var pool executorPool
+
+func (p *executorPool) init() {
+	p.once.Do(func() {
+		p.auto = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineAuto),
-			tsgo.WithTimeout(5*time.Second),
+			tsgo.WithTimeout(executorTimeout),
 		)
-
-		gojaExec = tsgo.New(
+		p.goja = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineGOJA),
-			tsgo.WithTimeout(5*time.Second),
+			tsgo.WithTimeout(executorTimeout),
 		)
-
-		bunExec = tsgo.New(
+		p.bun = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineBun),
-			tsgo.WithTimeout(5*time.Second),
+			tsgo.WithTimeout(executorTimeout),
 		)
-
-		// Prewarm engines in background
-		go prewarmEngines()
+		go p.warmup()
 	})
 }
 
-// prewarmEngines runs a simple script on each engine to warm up JIT and caches
-func prewarmEngines() {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+func (p *executorPool) warmup() {
+	ctx, cancel := context.WithTimeout(context.Background(), warmupTimeout)
 	defer cancel()
 
-	warmupCode := `export default 1 + 1`
+	const warmupCode = `export default 1 + 1`
 
-	if gojaExec != nil {
-		if _, err := gojaExec.Execute(ctx, warmupCode); err != nil {
+	if p.goja != nil {
+		if _, err := p.goja.Execute(ctx, warmupCode); err != nil {
 			log.Printf("GOJA warmup failed: %v", err)
 		} else {
 			log.Println("GOJA engine warmed up")
 		}
 	}
 
-	if bunExec != nil {
-		if _, err := bunExec.Execute(ctx, warmupCode); err != nil {
+	if p.bun != nil {
+		if _, err := p.bun.Execute(ctx, warmupCode); err != nil {
 			log.Printf("Bun warmup failed: %v", err)
 		} else {
 			log.Println("Bun engine warmed up")
@@ -76,325 +88,273 @@ func prewarmEngines() {
 	}
 }
 
-func getExecutor(engine string) *tsgo.Executor {
-	initExecutors()
-	execMu.RLock()
-	defer execMu.RUnlock()
+func (p *executorPool) get(engine string) *tsgo.Executor {
+	p.init()
+	p.mu.RLock()
+	defer p.mu.RUnlock()
 
 	switch engine {
 	case "bun":
-		if bunExec != nil {
-			return bunExec
+		if p.bun != nil {
+			return p.bun
 		}
-		return gojaExec
+		return p.goja
 	case "goja":
-		return gojaExec
+		return p.goja
 	default:
-		return autoExec
+		return p.auto
 	}
 }
 
-// executeWithContext executes code with context prepended
-// The context file exports are available as globals in the main script
-func executeWithContext(ctx context.Context, exec *tsgo.Executor, contextCode, mainCode string) (*tsgo.Result, error) {
-	// If there's context code, prepend it to make exports available
-	var fullCode string
-	if contextCode != "" {
-		// Remove export keywords from context to make variables available in scope
-		// and wrap the main code to use those variables
-		fullCode = contextCode + "\n\n" + mainCode
-	} else {
-		fullCode = mainCode
-	}
-
-	return exec.Execute(ctx, fullCode)
+// server encapsulates all HTTP handler dependencies.
+type server struct {
+	monacoHandler    http.Handler
+	contractAnalyzer *tsgo.ContractAnalyzer
+	typeInferrer     *tsgo.TypeInferrer
+	useTSInferrer    bool
 }
 
-func main() {
-	// Initialize and prewarm engines early
-	initExecutors()
-
-	// Create Monaco handler (no default types - loaded per sample)
+func newServer() *server {
 	handler := tsgo.NewMonacoHandler()
-	builder := tsgo.NewTypeBuilder()
-	handler.SetTypes(builder)
+	handler.SetTypes(tsgo.NewTypeBuilder())
 
-	// Create contract analyzer (no default types - types come from context)
-	contractAnalyzer := tsgo.NewContractAnalyzer()
+	s := &server{
+		monacoHandler:    handler,
+		contractAnalyzer: tsgo.NewContractAnalyzer(),
+		typeInferrer:     tsgo.NewTypeInferrer(),
+		useTSInferrer:    tsgo.IsBunAvailable(),
+	}
 
-	// Serve static files
-	http.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
-		path := r.URL.Path
-		if path == "/" {
-			path = "/index.html"
-		}
-
-		filename := path[1:]
-		data, err := content.ReadFile(filename)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
-
-		switch {
-		case filename == "index.html":
-			w.Header().Set("Content-Type", "text/html")
-		case filename == "styles.css":
-			w.Header().Set("Content-Type", "text/css")
-		case filename == "app.js":
-			w.Header().Set("Content-Type", "application/javascript")
-		case strings.HasSuffix(filename, ".ts"):
-			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-		case strings.HasSuffix(filename, ".json"):
-			w.Header().Set("Content-Type", "application/json")
-		}
-
-		_, _ = w.Write(data)
-	})
-
-	// Execute endpoint - now accepts context code
-	http.HandleFunc("/execute", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-			return
-		}
-
-		var req struct {
-			Code        string `json:"code"`
-			ContextCode string `json:"contextCode"`
-			Engine      string `json:"engine"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
-
-		exec := getExecutor(req.Engine)
-		ctx := context.Background()
-
-		result, err := executeWithContext(ctx, exec, req.ContextCode, req.Code)
-
-		w.Header().Set("Content-Type", "application/json")
-		if err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": err.Error(),
-			})
-			return
-		}
-
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"value":    result.Value,
-			"type":     fmt.Sprintf("%T", result.Value),
-			"duration": result.Metrics.ExecutionTime.String(),
-			"engine":   result.EngineUsed.String(),
-		})
-	})
-
-	// Type inferrer using TypeScript Compiler API (more accurate)
-	typeInferrer := tsgo.NewTypeInferrer()
-	useTSInferrer := tsgo.IsBunAvailable()
-	if useTSInferrer {
+	if s.useTSInferrer {
 		log.Println("TypeScript type inferrer enabled (Bun available)")
 	} else {
 		log.Println("TypeScript type inferrer disabled (Bun not found), using Go-based analyzer")
 	}
 
-	// Contract generation endpoint
-	http.HandleFunc("/contract", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodPost {
-			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+	return s
+}
+
+// serveStatic handles embedded static file serving.
+func (s *server) serveStatic(w http.ResponseWriter, r *http.Request) {
+	path := r.URL.Path
+	if path == "/" {
+		path = "/index.html"
+	}
+	filename := strings.TrimPrefix(path, "/")
+
+	data, err := content.ReadFile(filename)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
+
+	ext := filepath.Ext(filename)
+	if mimeType, ok := mimeTypes[ext]; ok {
+		w.Header().Set("Content-Type", mimeType)
+	}
+
+	_, _ = w.Write(data)
+}
+
+// executeRequest represents a code execution request.
+type executeRequest struct {
+	Code        string `json:"code"`
+	ContextCode string `json:"contextCode"`
+	Engine      string `json:"engine"`
+}
+
+// executeResponse represents a code execution response.
+type executeResponse struct {
+	Value    any    `json:"value,omitempty"`
+	Type     string `json:"type,omitempty"`
+	Duration string `json:"duration,omitempty"`
+	Engine   string `json:"engine,omitempty"`
+	Error    string `json:"error,omitempty"`
+}
+
+// handleExecute processes code execution requests.
+func (s *server) handleExecute(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req executeRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	exec := pool.get(req.Engine)
+	fullCode := combineCode(req.ContextCode, req.Code)
+
+	result, err := exec.Execute(r.Context(), fullCode)
+
+	w.Header().Set("Content-Type", "application/json")
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(executeResponse{Error: err.Error()})
+		return
+	}
+
+	_ = json.NewEncoder(w).Encode(executeResponse{
+		Value:    result.Value,
+		Type:     fmt.Sprintf("%T", result.Value),
+		Duration: result.Metrics.ExecutionTime.String(),
+		Engine:   result.EngineUsed.String(),
+	})
+}
+
+// contractRequest represents a contract generation request.
+type contractRequest struct {
+	Code        string `json:"code"`
+	ContextCode string `json:"contextCode"`
+}
+
+// contractResponse represents a contract generation response.
+type contractResponse struct {
+	TypeScript string `json:"typescript,omitempty"`
+	JSONSchema string `json:"jsonSchema,omitempty"`
+	Contract   string `json:"contract,omitempty"`
+	Inferrer   string `json:"inferrer,omitempty"`
+	Error      string `json:"error,omitempty"`
+}
+
+// handleContract generates type contracts from code.
+func (s *server) handleContract(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	var req contractRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSONError(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	fullCode := combineCode(req.ContextCode, req.Code)
+	w.Header().Set("Content-Type", "application/json")
+
+	// Try TypeScript Compiler API first (more accurate)
+	if s.useTSInferrer {
+		if resp := s.inferWithTypeScript(r.Context(), fullCode); resp != nil {
+			_ = json.NewEncoder(w).Encode(resp)
 			return
 		}
+	}
 
-		var req struct {
-			Code        string `json:"code"`
-			ContextCode string `json:"contextCode"`
-		}
-		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-			http.Error(w, err.Error(), http.StatusBadRequest)
-			return
-		}
+	// Fallback: Use Go-based regex analyzer
+	s.analyzeWithGo(w, fullCode)
+}
 
-		// Analyze the full code (context + main) for contract generation
-		fullCode := req.Code
-		if req.ContextCode != "" {
-			fullCode = req.ContextCode + "\n\n" + req.Code
-		}
-
-		w.Header().Set("Content-Type", "application/json")
-
-		// Try TypeScript Compiler API first (more accurate)
-		if useTSInferrer {
-			ctx := context.Background()
-			inferResult, err := typeInferrer.InferDefaultExport(ctx, fullCode)
-			if err == nil && inferResult.Error == "" {
-				// Convert inference result to Contract for proper formatting
-				c := tsgo.InferenceResultToContract(inferResult)
-				tsDef := c.ToTypeScript()
-				jsonSchema, _ := c.ToJSONSchemaJSON()
-
-				_ = json.NewEncoder(w).Encode(map[string]any{
-					"typescript": tsDef,
-					"jsonSchema": string(jsonSchema),
-					"contract":   fmt.Sprintf(`{"type":"%s","kind":"%s"}`, inferResult.Type, inferResult.Kind),
-					"inferrer":   "typescript",
-				})
-				return
-			}
-			// Fall through to Go-based analyzer on error
+// inferWithTypeScript attempts type inference using TypeScript compiler.
+func (s *server) inferWithTypeScript(ctx context.Context, code string) *contractResponse {
+	result, err := s.typeInferrer.InferDefaultExport(ctx, code)
+	if err != nil || result.Error != "" {
+		if err != nil {
 			log.Printf("TS inferrer error (falling back to Go): %v", err)
 		}
+		return nil
+	}
 
-		// Fallback: Use Go-based regex analyzer
-		c, err := contractAnalyzer.Analyze(fullCode)
-		if err != nil {
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"error": err.Error(),
-			})
-			return
-		}
+	c := tsgo.InferenceResultToContract(result)
+	jsonSchema, _ := c.ToJSONSchemaJSON()
 
-		tsDef := c.ToTypeScript()
-		jsonSchema, _ := c.ToJSONSchemaJSON()
-		contractJSON, _ := c.ToJSON()
+	return &contractResponse{
+		TypeScript: c.ToTypeScript(),
+		JSONSchema: string(jsonSchema),
+		Contract:   fmt.Sprintf(`{"type":%q,"kind":%q}`, result.Type, result.Kind),
+		Inferrer:   "typescript",
+	}
+}
 
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"typescript": tsDef,
-			"jsonSchema": string(jsonSchema),
-			"contract":   string(contractJSON),
-			"inferrer":   "go",
-		})
+// analyzeWithGo performs contract analysis using Go-based analyzer.
+func (s *server) analyzeWithGo(w http.ResponseWriter, code string) {
+	c, err := s.contractAnalyzer.Analyze(code)
+	if err != nil {
+		_ = json.NewEncoder(w).Encode(contractResponse{Error: err.Error()})
+		return
+	}
+
+	jsonSchema, _ := c.ToJSONSchemaJSON()
+	contractJSON, _ := c.ToJSON()
+
+	_ = json.NewEncoder(w).Encode(contractResponse{
+		TypeScript: c.ToTypeScript(),
+		JSONSchema: string(jsonSchema),
+		Contract:   string(contractJSON),
+		Inferrer:   "go",
 	})
+}
 
-	// Get sample with split context/code
-	http.HandleFunc("/sample/", func(w http.ResponseWriter, r *http.Request) {
-		sampleId := strings.TrimPrefix(r.URL.Path, "/sample/")
-		if sampleId == "" {
-			http.Error(w, "Sample ID required", http.StatusBadRequest)
-			return
-		}
+// sampleResponse represents a sample file response.
+type sampleResponse struct {
+	Context string `json:"context"`
+	Code    string `json:"code"`
+}
 
-		// Read the sample file
-		filename := "samples/" + sampleId + ".ts"
-		data, err := content.ReadFile(filename)
-		if err != nil {
-			http.NotFound(w, r)
-			return
-		}
+// handleSample serves sample files with context/code separation.
+func (s *server) handleSample(w http.ResponseWriter, r *http.Request) {
+	sampleID := strings.TrimPrefix(r.URL.Path, "/sample/")
+	if sampleID == "" {
+		http.Error(w, "Sample ID required", http.StatusBadRequest)
+		return
+	}
 
-		// Split on the separator
-		fullContent := string(data)
-		parts := strings.SplitN(fullContent, codeSeparator, 2)
+	filename := "samples/" + sampleID + ".ts"
+	data, err := content.ReadFile(filename)
+	if err != nil {
+		http.NotFound(w, r)
+		return
+	}
 
-		var contextCode, mainCode string
-		if len(parts) == 2 {
-			contextCode = strings.TrimSpace(parts[0])
-			mainCode = strings.TrimSpace(parts[1])
-		} else {
-			// No separator - everything is main code
-			mainCode = strings.TrimSpace(fullContent)
-		}
+	contextCode, mainCode := splitSample(string(data))
 
-		w.Header().Set("Content-Type", "application/json")
-		_ = json.NewEncoder(w).Encode(map[string]any{
-			"context": contextCode,
-			"code":    mainCode,
-		})
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(sampleResponse{
+		Context: contextCode,
+		Code:    mainCode,
 	})
+}
 
-	// Mount Monaco handler
-	http.Handle("/monaco/", http.StripPrefix("/monaco", handler))
+// splitSample separates context and main code from a sample file.
+func splitSample(content string) (context, main string) {
+	parts := strings.SplitN(content, codeSeparator, 2)
+	if len(parts) == 2 {
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1])
+	}
+	return "", strings.TrimSpace(content)
+}
 
-	addr := "localhost:8080"
-	fmt.Printf("Monaco editor available at http://%s\n", addr)
+// combineCode merges context and main code.
+func combineCode(context, main string) string {
+	if context == "" {
+		return main
+	}
+	return context + "\n\n" + main
+}
+
+// writeJSONError writes a JSON error response.
+func writeJSONError(w http.ResponseWriter, message string, status int) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
+}
+
+func main() {
+	pool.init()
+
+	srv := newServer()
+
+	http.HandleFunc("/", srv.serveStatic)
+	http.HandleFunc("/execute", srv.handleExecute)
+	http.HandleFunc("/contract", srv.handleContract)
+	http.HandleFunc("/sample/", srv.handleSample)
+	http.Handle("/monaco/", http.StripPrefix("/monaco", srv.monacoHandler))
+
+	fmt.Printf("Monaco editor available at http://%s\n", defaultAddr)
 	fmt.Println("Select a sample to load context and code")
 	fmt.Println("\nPress Ctrl+C to stop")
 
-	log.Fatal(http.ListenAndServe(addr, nil))
-}
-
-// buildTypeScriptFromInference creates a TypeScript type definition from inference result
-func buildTypeScriptFromInference(result *tsgo.InferenceResult) string {
-	if result.Type == "" {
-		return "// Contract definition\nexport type Result = any;\n"
-	}
-
-	switch result.Kind {
-	case "primitive", "literal":
-		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
-	case "object":
-		if len(result.Properties) > 0 {
-			var props []string
-			for _, prop := range result.Properties {
-				opt := ""
-				if prop.Optional {
-					opt = "?"
-				}
-				props = append(props, fmt.Sprintf("  %s%s: %s;", prop.Name, opt, prop.Type))
-			}
-			return fmt.Sprintf("// Contract definition\nexport type Result = {\n%s\n};\n", strings.Join(props, "\n"))
-		}
-		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
-	case "array":
-		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
-	case "function":
-		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
-	default:
-		return fmt.Sprintf("// Contract definition\nexport type Result = %s;\n", result.Type)
-	}
-}
-
-// buildJSONSchemaFromInference creates a JSON Schema from inference result
-func buildJSONSchemaFromInference(result *tsgo.InferenceResult) string {
-	schema := map[string]any{
-		"$schema": "http://json-schema.org/draft-07/schema#",
-	}
-
-	switch result.Kind {
-	case "primitive":
-		schema["type"] = tsToJSONSchemaType(result.Type)
-	case "object":
-		schema["type"] = "object"
-		if len(result.Properties) > 0 {
-			props := make(map[string]any)
-			for _, prop := range result.Properties {
-				props[prop.Name] = map[string]any{
-					"type": tsToJSONSchemaType(prop.Type),
-				}
-			}
-			schema["properties"] = props
-		}
-	case "array":
-		schema["type"] = "array"
-	case "function":
-		// Functions don't map well to JSON Schema
-		schema["type"] = "object"
-		schema["description"] = result.Type
-	default:
-		schema["type"] = "object"
-	}
-
-	jsonBytes, _ := json.Marshal(schema)
-	return string(jsonBytes)
-}
-
-// tsToJSONSchemaType converts TypeScript types to JSON Schema types
-func tsToJSONSchemaType(tsType string) string {
-	switch tsType {
-	case "string":
-		return "string"
-	case "number", "bigint":
-		return "number"
-	case "boolean":
-		return "boolean"
-	case "null":
-		return "null"
-	case "undefined":
-		return "null"
-	default:
-		if strings.HasSuffix(tsType, "[]") {
-			return "array"
-		}
-		return "object"
-	}
+	log.Fatal(http.ListenAndServe(defaultAddr, nil))
 }
