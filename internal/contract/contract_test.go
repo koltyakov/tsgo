@@ -2173,3 +2173,123 @@ export default {
 		t.Errorf("maxRetries: want number, got %s %s", maxRetriesType.Kind, maxRetriesType.Name)
 	}
 }
+
+func TestAnalyzeDeclaredGlobalMethodCall(t *testing.T) {
+	// Test that method calls on declared globals infer the return type correctly
+	code := `
+		declare const Bun: {
+			version: string;
+			nanoseconds(): bigint;
+			hash: {
+				md5(data: string): string;
+				crc32(data: string): number;
+			};
+		};
+
+		const timing = Bun.nanoseconds();
+		const hash = Bun.hash.md5("test");
+		const crc = Bun.hash.crc32("test");
+
+		export default { timing, hash, crc };
+	`
+
+	analyzer := NewAnalyzer()
+	contract, err := analyzer.Analyze(code)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contract.Type == nil || len(contract.Type.Properties) != 3 {
+		t.Fatalf("expected 3 properties, got %v", contract.Type)
+	}
+
+	// Check timing property - should be bigint from Bun.nanoseconds()
+	var timingType, hashType, crcType *TypeDef
+	for _, prop := range contract.Type.Properties {
+		switch prop.Name {
+		case "timing":
+			timingType = prop.Type
+		case "hash":
+			hashType = prop.Type
+		case "crc":
+			crcType = prop.Type
+		}
+	}
+
+	if timingType == nil || timingType.Name != "bigint" {
+		t.Errorf("timing: want bigint, got %v", timingType)
+	}
+
+	if hashType == nil || hashType.Name != "string" {
+		t.Errorf("hash: want string, got %v", hashType)
+	}
+
+	if crcType == nil || crcType.Name != "number" {
+		t.Errorf("crc: want number, got %v", crcType)
+	}
+}
+
+func TestAnalyzeDeclaredGlobalMethodCallDirect(t *testing.T) {
+	// Test direct export of method call result
+	code := `
+		declare const Bun: {
+			nanoseconds(): bigint;
+		};
+
+		export default Bun.nanoseconds();
+	`
+
+	analyzer := NewAnalyzer()
+	contract, err := analyzer.Analyze(code)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contract.Type == nil {
+		t.Fatal("expected type, got nil")
+	}
+
+	t.Logf("Got type: kind=%s name=%s", contract.Type.Kind, contract.Type.Name)
+
+	if contract.Type.Kind != "primitive" || contract.Type.Name != "bigint" {
+		t.Errorf("expected bigint, got kind=%s name=%s", contract.Type.Kind, contract.Type.Name)
+	}
+}
+
+func TestAnalyzeDeclaredGlobalWithRealContext(t *testing.T) {
+	// Simulate what happens with context + code in Monaco
+	contextCode := `// Context: Bun runtime utilities (Bun only)
+
+// Bun type declarations (these APIs exist at runtime)
+declare const Bun: {
+  version: string;
+  revision: string;
+  main: string;
+  nanoseconds(): bigint;
+  hash: {
+    md5(data: string): string;
+  };
+};
+`
+
+	mainCode := `export default Bun.nanoseconds();`
+
+	// This is how the server combines them
+	fullCode := contextCode + "\n\n" + mainCode
+
+	analyzer := NewAnalyzer()
+	contract, err := analyzer.Analyze(fullCode)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if contract.Type == nil {
+		t.Fatal("expected type, got nil")
+	}
+
+	t.Logf("Got type: kind=%s name=%s", contract.Type.Kind, contract.Type.Name)
+
+	if contract.Type.Kind != "primitive" || contract.Type.Name != "bigint" {
+		t.Errorf("expected bigint, got kind=%s name=%s", contract.Type.Kind, contract.Type.Name)
+	}
+}

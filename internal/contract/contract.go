@@ -18,6 +18,7 @@ var (
 	multiLineRe     = regexp.MustCompile(`/\*[\s\S]*?\*/`)
 	singleLineRe    = regexp.MustCompile(`//.*$`)
 	propRe          = regexp.MustCompile(`^(\w+)(\?)?:\s*([\s\S]+)$`)
+	methodRe        = regexp.MustCompile(`^(\w+)(\?)?\s*\([^)]*\)\s*:\s*([\s\S]+)$`) // Method signature: name(args): ReturnType
 	funcCallRe      = regexp.MustCompile(`^(\w+)\(`)
 	arrowFuncRe     = regexp.MustCompile(`^\([^)]*\)\s*:\s*([^=]+?)\s*=>`)
 	funcDeclRe      = regexp.MustCompile(`^function\s*\w*\s*\([^)]*\)\s*:\s*([^{]+?)\s*\{`)
@@ -39,7 +40,7 @@ type Contract struct {
 
 // TypeDef represents a TypeScript type definition.
 type TypeDef struct {
-	// Kind is the type category: "primitive", "object", "array", "union", "literal", "any".
+	// Kind is the type category: "primitive", "object", "array", "union", "literal", "function", "any".
 	Kind string `json:"kind"`
 	// Name is the type name for primitives/references (e.g., "string", "number", "User").
 	Name string `json:"name,omitempty"`
@@ -51,6 +52,8 @@ type TypeDef struct {
 	UnionTypes []*TypeDef `json:"unionTypes,omitempty"`
 	// LiteralValue is the value for literal types.
 	LiteralValue any `json:"literalValue,omitempty"`
+	// ReturnType is the return type for function types.
+	ReturnType *TypeDef `json:"returnType,omitempty"`
 	// Optional indicates if this type is optional (for properties).
 	Optional bool `json:"optional,omitempty"`
 	// Nullable indicates if the type can be null.
@@ -431,6 +434,23 @@ func (a *Analyzer) parseObjectBody(body string) []Property {
 			continue
 		}
 
+		// Match method signature: name(args): ReturnType
+		if match := methodRe.FindStringSubmatch(line); match != nil {
+			propName := match[1]
+			optional := match[2] == "?"
+			returnTypeStr := strings.TrimSpace(match[3])
+
+			props = append(props, Property{
+				Name: propName,
+				Type: &TypeDef{
+					Kind:       "function",
+					ReturnType: a.parseTypeExpression(returnTypeStr),
+				},
+				Required: !optional,
+			})
+			continue
+		}
+
 		// Match: name?: type or name: type
 		if match := propRe.FindStringSubmatch(line); match != nil {
 			propName := match[1]
@@ -610,7 +630,7 @@ func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 
 	// Primitive types
 	switch typeStr {
-	case "string", "number", "boolean", "any", "unknown", "void", "never":
+	case "string", "number", "boolean", "bigint", "symbol", "any", "unknown", "void", "never":
 		return &TypeDef{
 			Kind:     "primitive",
 			Name:     typeStr,
@@ -1086,7 +1106,7 @@ func (a *Analyzer) isStringConcatenation(expr string) bool {
 	return false
 }
 
-// inferMemberAccessType infers the type of a member access expression (e.g., config.apiUrl).
+// inferMemberAccessType infers the type of a member access expression (e.g., config.apiUrl, Bun.nanoseconds()).
 func (a *Analyzer) inferMemberAccessType(expr string, code string) *TypeDef {
 	parts := strings.Split(expr, ".")
 	if len(parts) < 2 {
@@ -1095,6 +1115,10 @@ func (a *Analyzer) inferMemberAccessType(expr string, code string) *TypeDef {
 
 	// Get the base object type
 	baseName := parts[0]
+	// Handle case where base might be a function call like "foo().bar"
+	if idx := strings.Index(baseName, "("); idx != -1 {
+		baseName = baseName[:idx]
+	}
 	var baseType *TypeDef
 
 	// Check pre-registered globals first
@@ -1146,9 +1170,22 @@ func (a *Analyzer) inferMemberAccessType(expr string, code string) *TypeDef {
 	currentType := baseType
 	for i := 1; i < len(parts); i++ {
 		propName := parts[i]
+		isMethodCall := false
+
+		// Check if this part is a method call (has parentheses)
+		if idx := strings.Index(propName, "("); idx != -1 {
+			propName = propName[:idx]
+			isMethodCall = true
+		}
+
 		currentType = a.getPropertyType(currentType, propName)
 		if currentType == nil {
 			return nil
+		}
+
+		// If this is a method call and the property is a function type, unwrap the return type
+		if isMethodCall && currentType.Kind == "function" && currentType.ReturnType != nil {
+			currentType = currentType.ReturnType
 		}
 	}
 
