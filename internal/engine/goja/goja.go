@@ -246,6 +246,13 @@ func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
+	// Set up a timer for periodic wake-ups (reused across iterations)
+	timer := time.NewTimer(50 * time.Millisecond)
+	defer timer.Stop()
+
+	// Channel for context cancellation signaling
+	ctxDone := ctx.Done()
+
 	// Try to find a free runtime with timeout-based retry
 	for {
 		// Check context first
@@ -271,27 +278,31 @@ func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 		}
 
 		// All runtimes busy - wait with timeout using sync.Cond
-		// Create a done channel that the goroutine will check
+		// Use a single goroutine to handle both context cancellation and timeout
 		done := make(chan struct{})
 
-		// Spawn a goroutine to wake us up on context cancellation or timeout
 		go func() {
-			timer := time.NewTimer(50 * time.Millisecond)
-			defer timer.Stop()
-
 			select {
-			case <-ctx.Done():
+			case <-ctxDone:
 				p.cond.Broadcast()
 			case <-timer.C:
 				p.cond.Signal()
 			case <-done:
-				// Parent returned, exit cleanly
 				return
 			}
 		}()
 
 		p.cond.Wait()
-		close(done) // Signal goroutine to exit
+		close(done)
+
+		// Reset timer for next iteration
+		if !timer.Stop() {
+			select {
+			case <-timer.C:
+			default:
+			}
+		}
+		timer.Reset(50 * time.Millisecond)
 	}
 }
 
@@ -357,19 +368,26 @@ func captureGlobalNames(runtime *goja.Runtime) map[string]struct{} {
 func clearRuntime(pr *pooledRuntime) {
 	pr.runtime.ClearInterrupt()
 
-	// Clear explicitly tracked user globals
+	// Clear explicitly tracked user globals first (fast path)
 	pr.userGlobalMu.Lock()
 	userGlobals := pr.userGlobals
 	pr.userGlobalMu.Unlock()
 
+	// Use a set to track what we've already cleared
+	cleared := make(map[string]struct{}, len(userGlobals))
 	for _, name := range userGlobals {
 		pr.runtime.Set(name, goja.Undefined())
+		cleared[name] = struct{}{}
 	}
 
 	// Scan for any globals created during execution (e.g., via globalThis.foo = ...)
 	// and remove them if they weren't part of the base runtime
 	globalObj := pr.runtime.GlobalObject()
 	for _, key := range globalObj.Keys() {
+		// Skip if already cleared or is a base global
+		if _, done := cleared[key]; done {
+			continue
+		}
 		if _, isBase := pr.baseGlobals[key]; !isBase {
 			pr.runtime.Set(key, goja.Undefined())
 		}
