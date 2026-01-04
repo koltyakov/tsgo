@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -23,7 +22,6 @@ var (
 	arrowFuncRe     = regexp.MustCompile(`^\([^)]*\)\s*:\s*([^=]+?)\s*=>`)
 	funcDeclRe      = regexp.MustCompile(`^function\s*\w*\s*\([^)]*\)\s*:\s*([^{]+?)\s*\{`)
 	promiseTypeRe   = regexp.MustCompile(`^Promise<(.+)>$`)
-	declareVarRe    = regexp.MustCompile(`(?m)declare\s+(?:const|var|let)\s+(\w+)\s*:\s*([^;]+);?`)
 	splitStmtRe     = regexp.MustCompile(`[;\n]`)
 )
 
@@ -2288,31 +2286,13 @@ func (a *Analyzer) inferArrayLiteralType(expr string, code string) *TypeDef {
 }
 
 // extractInputs finds global variable references in the code.
+// Note: We no longer extract inputs from `declare const/var/let` statements
+// because those are TypeScript ambient declarations for type checking, not
+// actual runtime inputs. Ambient declarations like `declare const Bun: ...`
+// are type hints for built-in globals, not user-provided data.
 func (a *Analyzer) extractInputs(code string) []Property {
-	var inputs []Property
-	seen := make(map[string]bool)
-
-	// Look for declared globals
-	matches := declareVarRe.FindAllStringSubmatch(code, -1)
-
-	for _, match := range matches {
-		name := match[1]
-		typeStr := strings.TrimSpace(match[2])
-		if !seen[name] {
-			seen[name] = true
-			inputs = append(inputs, Property{
-				Name:     name,
-				Type:     a.parseTypeExpression(typeStr),
-				Required: true,
-			})
-		}
-	}
-
-	sort.Slice(inputs, func(i, j int) bool {
-		return inputs[i].Name < inputs[j].Name
-	})
-
-	return inputs
+	// Return empty - ambient declarations are not inputs
+	return nil
 }
 
 // ToTypeScript generates TypeScript type definitions for the contract.

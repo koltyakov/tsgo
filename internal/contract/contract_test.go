@@ -163,6 +163,10 @@ func TestAnalyzeOptionalProperties(t *testing.T) {
 }
 
 func TestAnalyzeWithDeclaredInputs(t *testing.T) {
+	// Note: declare const/var/let statements are ambient type declarations in TypeScript
+	// They tell the compiler a global exists at runtime but don't create it.
+	// We no longer extract these as inputs because they're often used for
+	// typing built-in globals (like Bun, process, Buffer) rather than user-provided data.
 	code := `
 		declare const userId: number;
 		declare const userName: string;
@@ -176,17 +180,9 @@ func TestAnalyzeWithDeclaredInputs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if len(contract.Inputs) != 2 {
-		t.Errorf("expected 2 inputs, got %d", len(contract.Inputs))
-	}
-
-	if len(contract.Inputs) >= 2 {
-		if contract.Inputs[0].Name != "userId" {
-			t.Errorf("expected userId first, got %s", contract.Inputs[0].Name)
-		}
-		if contract.Inputs[1].Name != "userName" {
-			t.Errorf("expected userName second, got %s", contract.Inputs[1].Name)
-		}
+	// Expect 0 inputs - declare statements are type hints, not inputs
+	if len(contract.Inputs) != 0 {
+		t.Errorf("expected 0 inputs (declare statements are ambient declarations), got %d", len(contract.Inputs))
 	}
 }
 

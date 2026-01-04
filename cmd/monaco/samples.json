@@ -90,6 +90,13 @@
       "description": "Async task queue with priorities and retries (Bun only)",
       "category": "bun-only",
       "engine": "bun"
+    },
+    {
+      "id": "bun-native",
+      "name": "Bun Native APIs",
+      "description": "Hashing, high-precision timing, and runtime info (Bun only)",
+      "category": "bun-only",
+      "engine": "bun"
     }
   ]
 }

@@ -26,6 +26,7 @@ const SAMPLE_ENGINES = {
   'async-fetch': 'bun',
   'parallel-tasks': 'bun',
   'task-scheduler': 'bun',
+  'bun-native': 'bun',
 };
 
 // GOJA unsupported features patterns
@@ -518,6 +519,39 @@ function updateMonacoTypes(contextCode) {
   monaco.editor.colorizeElement(typesPreview, { theme: 'vs-dark' });
 }
 
+// Extract declare const statements from context code, handling nested braces
+function extractDeclareConsts(code) {
+  const declares = [];
+  const declareStartRegex = /declare\s+const\s+(\w+)\s*:\s*\{/g;
+  let match;
+  
+  while ((match = declareStartRegex.exec(code)) !== null) {
+    const startIndex = match.index;
+    const braceStart = code.indexOf('{', startIndex);
+    
+    // Count braces to find matching closing brace
+    let depth = 0;
+    let endIndex = braceStart;
+    for (let i = braceStart; i < code.length; i++) {
+      if (code[i] === '{') depth++;
+      else if (code[i] === '}') {
+        depth--;
+        if (depth === 0) {
+          endIndex = i + 1;
+          break;
+        }
+      }
+    }
+    
+    // Include the semicolon if present
+    if (code[endIndex] === ';') endIndex++;
+    
+    declares.push(code.slice(startIndex, endIndex));
+  }
+  
+  return declares;
+}
+
 // Extract interfaces from context code, handling nested braces
 function extractInterfaces(code) {
   const interfaces = [];
@@ -552,6 +586,13 @@ function extractInterfaces(code) {
 function convertToAmbientDeclarations(contextCode) {
   const parts = [];
   parts.push('// Auto-generated from context file');
+  
+  // Extract existing declare const statements (including multi-line with nested braces)
+  const declareConsts = extractDeclareConsts(contextCode);
+  if (declareConsts.length > 0) {
+    parts.push(''); // blank line before declare consts
+    parts.push(...declareConsts);
+  }
   
   // Extract interface declarations with proper nested brace handling
   const interfaces = extractInterfaces(contextCode);
