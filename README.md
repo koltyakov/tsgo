@@ -326,6 +326,41 @@ http.Handle("/", handler)
 http.ListenAndServe(":8080", nil)
 ```
 
+## Monaco Playground Demo
+
+The project includes a fully-featured Monaco editor playground for testing TypeScript execution:
+
+```bash
+# Run the playground
+make monaco
+
+# Or directly with Go
+go run ./cmd/monaco
+```
+
+Then open http://localhost:8080 in your browser.
+
+![Monaco Demo](./assets/monaco-demo.jpg)
+
+### Features
+
+- **Live TypeScript editing** with full IntelliSense and autocomplete
+- **Engine selection** — Auto (recommended), GOJA, or Bun
+- **Real-time contract generation** — see TypeScript types and JSON Schema as you type
+- **GOJA compatibility warnings** — errors shown when using unsupported features (async/await, fetch, etc.)
+- **Persistent code** — your code is saved to localStorage automatically
+- **Keyboard shortcut** — Press `⌘+Enter` (Mac) or `Ctrl+Enter` (Windows/Linux) to run
+
+### Injected Globals
+
+The demo provides typed globals you can use in your scripts:
+
+```typescript
+// Available globals with full type support
+const user: User = currentUser;  // { id, name, email, role }
+const cfg: Config = config;       // { apiUrl, timeout, debug }
+```
+
 ## Project Structure
 
 ```
