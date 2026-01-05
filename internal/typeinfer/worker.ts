@@ -163,12 +163,58 @@ function inferDefaultExportType(code: string): InferenceResult {
   // Find the default export
   let exportType: ts.Type | undefined;
   let exportNode: ts.Node | undefined;
+  let literalFallback: InferenceResult | undefined;
 
   ts.forEachChild(sourceFile, (node: ts.Node) => {
     // Handle: export default expr;
     if (ts.isExportAssignment(node) && !node.isExportEquals) {
       exportNode = node.expression;
       exportType = checker.getTypeAtLocation(node.expression);
+      
+      // TypeScript's type checker returns 'any' for direct literal exports like
+      // `export default 42` or `export default "hello"`. Detect these via AST.
+      const expr = node.expression;
+      if (ts.isNumericLiteral(expr)) {
+        literalFallback = { type: 'number', kind: 'primitive' };
+      } else if (ts.isStringLiteral(expr)) {
+        literalFallback = { type: 'string', kind: 'primitive' };
+      } else if (ts.isBigIntLiteral(expr)) {
+        literalFallback = { type: 'bigint', kind: 'primitive' };
+      } else if (expr.kind === ts.SyntaxKind.NullKeyword) {
+        literalFallback = { type: 'null', kind: 'literal' };
+      } else if (expr.kind === ts.SyntaxKind.TrueKeyword || expr.kind === ts.SyntaxKind.FalseKeyword) {
+        // Direct boolean literal exports - type checker returns literal type, we want primitive
+        literalFallback = { type: 'boolean', kind: 'primitive' };
+      } else if (ts.isArrowFunction(expr) || ts.isFunctionExpression(expr)) {
+        // Direct function exports - extract the return type
+        // For `export default async () => { return 42; }` we want number (awaited)
+        const sig = checker.getSignatureFromDeclaration(expr);
+        if (sig) {
+          let returnType = checker.getReturnTypeOfSignature(sig);
+          // Unwrap Promise<T> to get the awaited type
+          returnType = unwrapPromiseType(returnType, checker);
+          const returnTypeStr = checker.typeToString(returnType, undefined, 
+            ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.InTypeAlias);
+          // Determine kind based on return type
+          let kind: InferenceResult['kind'] = 'any';
+          if (returnType.flags & ts.TypeFlags.Number) kind = 'primitive';
+          else if (returnType.flags & ts.TypeFlags.String) kind = 'primitive';
+          else if (returnType.flags & ts.TypeFlags.Boolean) kind = 'primitive';
+          else if (returnType.flags & ts.TypeFlags.Void) kind = 'primitive';
+          else if (checker.isArrayType(returnType)) kind = 'array';
+          else if (returnType.isUnion()) kind = 'union';
+          else if (returnType.flags & ts.TypeFlags.Object) kind = 'object';
+          literalFallback = { type: returnTypeStr, kind, returnType: returnTypeStr };
+        }
+      } else if (ts.isArrayLiteralExpression(expr)) {
+        // Array literals with direct export - infer element type
+        if (expr.elements.length === 0) {
+          literalFallback = { type: 'never[]', kind: 'array', elementType: 'never' };
+        }
+        // Non-empty arrays are typically handled correctly
+      } else if (ts.isObjectLiteralExpression(expr)) {
+        // Object literals with direct export - checker usually handles this
+      }
     }
     // Handle: export { x as default };
     else if (ts.isExportDeclaration(node) && node.exportClause && ts.isNamedExports(node.exportClause)) {
@@ -176,6 +222,33 @@ function inferDefaultExportType(code: string): InferenceResult {
         if (element.name.text === 'default') {
           exportNode = element;
           exportType = checker.getTypeAtLocation(element);
+        }
+      }
+    }
+    // Handle: export default function() {} or export default async function() {}
+    else if (ts.isFunctionDeclaration(node)) {
+      const isDefault = node.modifiers?.some((m: ts.ModifierLike) => m.kind === ts.SyntaxKind.DefaultKeyword);
+      const isExport = node.modifiers?.some((m: ts.ModifierLike) => m.kind === ts.SyntaxKind.ExportKeyword);
+      if (isDefault && isExport) {
+        exportNode = node;
+        exportType = checker.getTypeAtLocation(node);
+        // Extract the return type
+        const sig = checker.getSignatureFromDeclaration(node);
+        if (sig) {
+          let returnType = checker.getReturnTypeOfSignature(sig);
+          // Unwrap Promise<T> to get the awaited type
+          returnType = unwrapPromiseType(returnType, checker);
+          const returnTypeStr = checker.typeToString(returnType, undefined,
+            ts.TypeFormatFlags.NoTruncation | ts.TypeFormatFlags.InTypeAlias);
+          let kind: InferenceResult['kind'] = 'any';
+          if (returnType.flags & ts.TypeFlags.Number) kind = 'primitive';
+          else if (returnType.flags & ts.TypeFlags.String) kind = 'primitive';
+          else if (returnType.flags & ts.TypeFlags.Boolean) kind = 'primitive';
+          else if (returnType.flags & ts.TypeFlags.Void) kind = 'primitive';
+          else if (checker.isArrayType(returnType)) kind = 'array';
+          else if (returnType.isUnion()) kind = 'union';
+          else if (returnType.flags & ts.TypeFlags.Object) kind = 'object';
+          literalFallback = { type: returnTypeStr, kind, returnType: returnTypeStr };
         }
       }
     }
@@ -194,10 +267,33 @@ function inferDefaultExportType(code: string): InferenceResult {
     ts.TypeFormatFlags.InTypeAlias
   );
 
+  // If we detected a direct literal export, use the widened type
+  // This handles: export default 42, export default "hi", export default true
+  if (literalFallback) {
+    return literalFallback;
+  }
+
   // Format the type string for readability with newlines
   const formattedType = formatTypeString(typeString, exportType, checker);
 
   return analyzeTypeString(formattedType, exportType, checker);
+}
+
+/**
+ * Unwrap Promise<T> to get T (the awaited type)
+ */
+function unwrapPromiseType(type: ts.Type, checker: ts.TypeChecker): ts.Type {
+  const typeRef = type as ts.TypeReference;
+  if (typeRef.target) {
+    const symbol = typeRef.target.getSymbol();
+    if (symbol && symbol.getName() === 'Promise') {
+      const typeArgs = checker.getTypeArguments(typeRef);
+      if (typeArgs.length > 0) {
+        return typeArgs[0];
+      }
+    }
+  }
+  return type;
 }
 
 /**
@@ -231,6 +327,63 @@ function isPreservedType(type: ts.Type, checker: ts.TypeChecker): { preserved: b
     }
   }
   return { preserved: false };
+}
+
+/**
+ * Check if a union type represents an enum and return the enum name
+ */
+function getEnumName(type: ts.UnionType, checker: ts.TypeChecker): string | null {
+  if (!type.types || type.types.length === 0) return null;
+  
+  let enumName: string | null = null;
+  
+  for (const member of type.types) {
+    // Get the symbol for this type
+    const symbol = member.getSymbol();
+    if (!symbol) return null;
+    
+    // Check if this symbol's parent is an enum
+    const parent = symbol.parent;
+    if (!parent) return null;
+    
+    const parentDecl = parent.declarations?.[0];
+    if (!parentDecl || !ts.isEnumDeclaration(parentDecl)) return null;
+    
+    const thisEnumName = parent.getName();
+    if (enumName === null) {
+      enumName = thisEnumName;
+    } else if (enumName !== thisEnumName) {
+      // Different enums in the union
+      return null;
+    }
+  }
+  
+  return enumName;
+}
+
+/**
+ * Check if a union consists entirely of same-type literals that can be widened
+ * e.g., 1 | 0 -> "number", "a" | "b" -> "string"
+ * Returns null if not all same type, or if types include non-literals
+ */
+function getWidenedLiteralUnion(type: ts.UnionType): string | null {
+  if (!type.types || type.types.length === 0) return null;
+  
+  let allNumericLiterals = true;
+  let allStringLiterals = true;
+  let allBooleanLiterals = true;
+  
+  for (const member of type.types) {
+    if (!member.isNumberLiteral()) allNumericLiterals = false;
+    if (!member.isStringLiteral()) allStringLiterals = false;
+    if (!(member.flags & ts.TypeFlags.BooleanLiteral)) allBooleanLiterals = false;
+  }
+  
+  if (allNumericLiterals) return 'number';
+  if (allStringLiterals) return 'string';
+  if (allBooleanLiterals) return 'boolean';
+  
+  return null;
 }
 
 /**
@@ -276,8 +429,20 @@ function expandType(type: ts.Type, checker: ts.TypeChecker, visited: Set<ts.Type
   if (type.flags & ts.TypeFlags.Any) return 'any';
   if (type.flags & ts.TypeFlags.Unknown) return 'unknown';
 
-  // Handle union types
+  // Handle enum types - check if all union members come from same enum
   if (type.isUnion()) {
+    const enumName = getEnumName(type, checker);
+    if (enumName) {
+      return enumName;
+    }
+    
+    // Widen unions of same-type literals to their base type
+    // e.g., 1 | 0 -> number, "a" | "b" -> string (but only when inferred, not explicit)
+    const widenedType = getWidenedLiteralUnion(type);
+    if (widenedType) {
+      return widenedType;
+    }
+    
     const parts = type.types.map((t: ts.Type) => expandType(t, checker, new Set(visited), depth + 1));
     return parts.join(' | ');
   }
@@ -304,9 +469,32 @@ function expandType(type: ts.Type, checker: ts.TypeChecker, visited: Set<ts.Type
 
   // Handle tuple types
   if (checker.isTupleType(type)) {
-    const typeArgs = checker.getTypeArguments(type as ts.TypeReference);
-    const elements = typeArgs.map((t: ts.Type) => expandType(t, checker, new Set(visited), depth + 1));
-    return `[${elements.join(', ')}]`;
+    const typeRef = type as ts.TypeReference;
+    const target = typeRef.target as ts.TupleType;
+    const typeArgs = checker.getTypeArguments(typeRef);
+    
+    // Check for readonly modifier
+    const isReadonly = target.readonly ?? false;
+    
+    // Get element flags for optional detection
+    const elementFlags = target.elementFlags ?? [];
+    
+    const elements: string[] = [];
+    for (let i = 0; i < typeArgs.length; i++) {
+      const elemType = expandType(typeArgs[i], checker, new Set(visited), depth + 1);
+      // ts.ElementFlags.Optional = 2
+      const isOptional = (elementFlags[i] ?? 0) & 2;
+      if (isOptional) {
+        // For optional elements, show as T? instead of T | undefined
+        const baseType = elemType.replace(/ \| undefined$/, '').replace(/^undefined \| /, '');
+        elements.push(`${baseType}?`);
+      } else {
+        elements.push(elemType);
+      }
+    }
+    
+    const tupleStr = `[${elements.join(', ')}]`;
+    return isReadonly ? `readonly ${tupleStr}` : tupleStr;
   }
 
   // Handle function types
