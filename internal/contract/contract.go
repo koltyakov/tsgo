@@ -22,18 +22,21 @@ import (
 
 // Pre-compiled regexes for performance (compiled once at package init)
 var (
-	typeAliasRe     = regexp.MustCompile(`(?m)type\s+(\w+)\s*=\s*([^;]+);`)
-	exportDefaultRe = regexp.MustCompile(`(?m)export\s+default\s+([^;]+);?`)
-	constExportRe   = regexp.MustCompile(`(?m)const\s+(\w+)\s*:\s*([^=]+)\s*=`)
-	multiLineRe     = regexp.MustCompile(`/\*[\s\S]*?\*/`)
-	singleLineRe    = regexp.MustCompile(`//.*$`)
-	propRe          = regexp.MustCompile(`^(\w+)(\?)?:\s*([\s\S]+)$`)
-	methodRe        = regexp.MustCompile(`^(\w+)(\?)?\s*\([^)]*\)\s*:\s*([\s\S]+)$`) // Method signature: name(args): ReturnType
-	funcCallRe      = regexp.MustCompile(`^(\w+)\(`)
-	arrowFuncRe     = regexp.MustCompile(`^\([^)]*\)\s*:\s*([^=]+?)\s*=>`)
-	funcDeclRe      = regexp.MustCompile(`^function\s*\w*\s*\([^)]*\)\s*:\s*([^{]+?)\s*\{`)
-	promiseTypeRe   = regexp.MustCompile(`^Promise<(.+)>$`)
-	splitStmtRe     = regexp.MustCompile(`[;\n]`)
+	typeAliasRe       = regexp.MustCompile(`(?m)type\s+(\w+)\s*=\s*([^;]+);`)
+	exportDefaultRe   = regexp.MustCompile(`(?m)export\s+default\s+([^;]+);?`)
+	constExportRe     = regexp.MustCompile(`(?m)const\s+(\w+)\s*:\s*([^=]+)\s*=`)
+	multiLineRe       = regexp.MustCompile(`/\*[\s\S]*?\*/`)
+	singleLineRe      = regexp.MustCompile(`//.*$`)
+	propRe            = regexp.MustCompile(`^(\w+)(\?)?:\s*([\s\S]+)$`)
+	methodRe          = regexp.MustCompile(`^(\w+)(\?)?\s*\([^)]*\)\s*:\s*([\s\S]+)$`) // Method signature: name(args): ReturnType
+	funcCallRe        = regexp.MustCompile(`^(\w+)\(`)
+	promiseTypeRe     = regexp.MustCompile(`^Promise<(.+)>$`)
+	splitStmtRe       = regexp.MustCompile(`[;\n]`)
+	interfaceStartRe  = regexp.MustCompile(`(?m)interface\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{`)
+	arrowFuncParamsRe = regexp.MustCompile(`^\(([^)]*)\)\s*:\s*([^=]+)\s*=>`)
+	funcExprParamsRe  = regexp.MustCompile(`^function\s*\(([^)]*)\)\s*:\s*([^{]+)\s*\{`)
+	indexedAccessRe   = regexp.MustCompile(`^(\w+)\[([^\]]+)\]\.(\w+)$`)
+	returnStmtRe      = regexp.MustCompile(`(?m)^\s*return\s+`)
 )
 
 // ============================================================================
@@ -46,8 +49,6 @@ type Contract struct {
 	Name string `json:"name"`
 	// Type is the TypeScript type of the default export.
 	Type *TypeDef `json:"type"`
-	// Inputs are the expected global variables the script uses.
-	Inputs []Property `json:"inputs,omitempty"`
 	// Description is an optional description of the contract.
 	Description string `json:"description,omitempty"`
 }
@@ -178,13 +179,9 @@ func (a *Analyzer) Analyze(code string) (*Contract, error) {
 		exportType = &TypeDef{Kind: "any", Name: "any"}
 	}
 
-	// Extract inputs (global references)
-	inputs := a.extractInputs(code)
-
 	return &Contract{
-		Name:   "Result",
-		Type:   exportType,
-		Inputs: inputs,
+		Name: "Result",
+		Type: exportType,
 	}, nil
 }
 
@@ -225,9 +222,6 @@ func extractInterfaceBody(code string, start int) (string, int) {
 
 // parseInterfaces extracts interface definitions from code.
 func (a *Analyzer) parseInterfaces(code string) {
-	// Find all interface declarations manually to handle nested braces
-	interfaceStartRe := regexp.MustCompile(`(?m)interface\s+(\w+)(?:\s+extends\s+(\w+))?\s*\{`)
-
 	// First pass: collect all interfaces without resolving extends
 	pendingExtends := make(map[string]string) // interface name -> base interface name
 
@@ -506,19 +500,40 @@ func (a *Analyzer) parseObjectBody(body string) []Property {
 func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 	typeStr = strings.TrimSpace(typeStr)
 
-	// Check for null/undefined union
+	// Handle union types with null/undefined - preserve as union
+	// e.g., "string | null" should become a union type, not a nullable string
+	if strings.Contains(typeStr, "|") {
+		// Check if it contains null or undefined as union members
+		hasNullUnion := strings.Contains(typeStr, "| null") || strings.Contains(typeStr, "null |")
+		hasUndefinedUnion := strings.Contains(typeStr, "| undefined") || strings.Contains(typeStr, "undefined |")
+
+		if hasNullUnion || hasUndefinedUnion {
+			// Parse as union type to preserve structure
+			parts := strings.Split(typeStr, "|")
+			var unionTypes []*TypeDef
+			for _, part := range parts {
+				part = strings.TrimSpace(part)
+				if part == "" {
+					continue
+				}
+				switch part {
+				case "null":
+					unionTypes = append(unionTypes, &TypeDef{Kind: "literal", Name: "null"})
+				case "undefined":
+					unionTypes = append(unionTypes, &TypeDef{Kind: "primitive", Name: "undefined"})
+				default:
+					unionTypes = append(unionTypes, a.parseTypeExpression(part))
+				}
+			}
+			return &TypeDef{
+				Kind:       "union",
+				UnionTypes: unionTypes,
+			}
+		}
+	}
+
+	// nullable flag for backward compatibility (non-union nullable types)
 	nullable := false
-	if strings.Contains(typeStr, "| null") || strings.Contains(typeStr, "null |") {
-		nullable = true
-		typeStr = strings.ReplaceAll(typeStr, "| null", "")
-		typeStr = strings.ReplaceAll(typeStr, "null |", "")
-		typeStr = strings.TrimSpace(typeStr)
-	}
-	if strings.Contains(typeStr, "| undefined") || strings.Contains(typeStr, "undefined |") {
-		typeStr = strings.ReplaceAll(typeStr, "| undefined", "")
-		typeStr = strings.ReplaceAll(typeStr, "undefined |", "")
-		typeStr = strings.TrimSpace(typeStr)
-	}
 
 	// Array type: Type[] or Array<Type>
 	if strings.HasSuffix(typeStr, "[]") {
@@ -543,8 +558,8 @@ func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 		innerType := typeStr[8 : len(typeStr)-1]
 		baseType := a.parseTypeExpression(innerType)
 		// Make all properties optional (Required=false)
-		for _, prop := range baseType.Properties {
-			prop.Required = false
+		for i := range baseType.Properties {
+			baseType.Properties[i].Required = false
 		}
 		return &TypeDef{
 			Kind:       baseType.Kind,
@@ -559,8 +574,8 @@ func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 		innerType := typeStr[9 : len(typeStr)-1]
 		baseType := a.parseTypeExpression(innerType)
 		// Make all properties required
-		for _, prop := range baseType.Properties {
-			prop.Required = true
+		for i := range baseType.Properties {
+			baseType.Properties[i].Required = true
 		}
 		return baseType
 	}
@@ -705,6 +720,13 @@ func (a *Analyzer) parseTypeExpression(typeStr string) *TypeDef {
 func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 	expr = strings.TrimSpace(expr)
 
+	// Handle "as const" assertions - preserve literal type
+	if strings.HasSuffix(expr, " as const") {
+		innerExpr := strings.TrimSuffix(expr, " as const")
+		innerExpr = strings.TrimSpace(innerExpr)
+		return a.inferLiteralType(innerExpr, code)
+	}
+
 	// Handle await expression - strip await and infer from the inner expression
 	// The awaited result is the unwrapped Promise type
 	if strings.HasPrefix(expr, "await ") {
@@ -770,6 +792,16 @@ func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 		return &TypeDef{Kind: "primitive", Name: "boolean"}
 	}
 
+	// null literal
+	if expr == "null" {
+		return &TypeDef{Kind: "literal", Name: "null"}
+	}
+
+	// undefined literal
+	if expr == "undefined" {
+		return &TypeDef{Kind: "primitive", Name: "undefined"}
+	}
+
 	// Variable reference - look up its type (with type annotation)
 	varTypeRe := regexp.MustCompile(`(?m)(?:export\s+)?(?:const|let|var)\s+` + regexp.QuoteMeta(expr) + `\s*:\s*([^=]+)\s*=`)
 	if match := varTypeRe.FindStringSubmatch(code); match != nil {
@@ -797,6 +829,24 @@ func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 	for builtin, typeName := range builtinTypes {
 		if strings.HasPrefix(expr, builtin+"(") {
 			return &TypeDef{Kind: "primitive", Name: typeName}
+		}
+	}
+
+	// Class instantiation: new ClassName(...)
+	if strings.HasPrefix(expr, "new ") {
+		// Extract class name from: new ClassName(args)
+		newExpr := strings.TrimPrefix(expr, "new ")
+		newExpr = strings.TrimSpace(newExpr)
+		if idx := strings.Index(newExpr, "("); idx > 0 {
+			className := strings.TrimSpace(newExpr[:idx])
+			// Check if the class is defined in the code
+			classPattern := regexp.MustCompile(`class\s+` + regexp.QuoteMeta(className) + `\s*(\{|extends)`)
+			if classPattern.MatchString(code) {
+				return &TypeDef{Kind: "object", Name: className}
+			}
+			// Could also be a builtin class like Map, Set, etc.
+			// Return the class name as object type
+			return &TypeDef{Kind: "object", Name: className}
 		}
 	}
 
@@ -850,6 +900,10 @@ func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 
 	// Member access expression (e.g., config.apiUrl)
 	if strings.Contains(expr, ".") {
+		// Check for enum member access (e.g., Color.Green)
+		if enumType := a.inferEnumMemberAccess(expr, code); enumType != nil {
+			return enumType
+		}
 		if memberType := a.inferMemberAccessType(expr, code); memberType != nil {
 			return memberType
 		}
@@ -863,9 +917,46 @@ func (a *Analyzer) inferTypeFromExpression(expr string, code string) *TypeDef {
 	return &TypeDef{Kind: "any", Name: "any"}
 }
 
-// inferFunctionReturnType extracts the return type from a function expression.
+// inferLiteralType infers a literal type from an expression (used for "as const").
+// Returns the exact literal value as the type.
+func (a *Analyzer) inferLiteralType(expr string, code string) *TypeDef {
+	expr = strings.TrimSpace(expr)
+
+	// Number literal
+	if isNumeric(expr) {
+		return &TypeDef{Kind: "literal", Name: "number", LiteralValue: expr}
+	}
+
+	// String literal - include quotes in the type
+	if (strings.HasPrefix(expr, `"`) && strings.HasSuffix(expr, `"`)) ||
+		(strings.HasPrefix(expr, "'") && strings.HasSuffix(expr, "'")) {
+		// Convert to double-quoted string for consistency
+		value := expr[1 : len(expr)-1]
+		return &TypeDef{Kind: "literal", Name: "string", LiteralValue: `"` + value + `"`}
+	}
+
+	// Boolean literal
+	if expr == "true" || expr == "false" {
+		return &TypeDef{Kind: "literal", Name: "boolean", LiteralValue: expr}
+	}
+
+	// null
+	if expr == "null" {
+		return &TypeDef{Kind: "literal", Name: "null"}
+	}
+
+	// Array literal - create readonly tuple type
+	if strings.HasPrefix(expr, "[") {
+		return a.inferArrayLiteralType(expr, code)
+	}
+
+	// Fall back to regular inference
+	return a.inferTypeFromExpression(expr, code)
+}
+
+// inferFunctionReturnType extracts the full function type from a function expression.
 // Handles: async (): Promise<Type> => ..., (): Type => ..., function(): Type { ... }
-// For async functions, unwraps Promise<T> to return T (since runtime resolves promises).
+// For async functions, unwraps Promise<T> to return T in the signature (since runtime resolves promises).
 func (a *Analyzer) inferFunctionReturnType(expr string) *TypeDef {
 	expr = strings.TrimSpace(expr)
 
@@ -876,19 +967,21 @@ func (a *Analyzer) inferFunctionReturnType(expr string) *TypeDef {
 		expr = strings.TrimSpace(expr)
 	}
 
-	// Arrow function: (...): ReturnType => ...
-	// or function expression: function(...): ReturnType { ... }
+	var params string
 	var returnTypeStr string
 
-	// Pattern 1: Arrow function with return type - (...): Type =>
-	if match := arrowFuncRe.FindStringSubmatch(expr); match != nil {
-		returnTypeStr = strings.TrimSpace(match[1])
+	// Pattern 1: Arrow function with return type - (params): Type =>
+	// Match: (params): returnType =>
+	if match := arrowFuncParamsRe.FindStringSubmatch(expr); match != nil {
+		params = strings.TrimSpace(match[1])
+		returnTypeStr = strings.TrimSpace(match[2])
 	}
 
-	// Pattern 2: function(...): Type { ... }
+	// Pattern 2: function (params): Type { ... }
 	if returnTypeStr == "" {
-		if match := funcDeclRe.FindStringSubmatch(expr); match != nil {
-			returnTypeStr = strings.TrimSpace(match[1])
+		if match := funcExprParamsRe.FindStringSubmatch(expr); match != nil {
+			params = strings.TrimSpace(match[1])
+			returnTypeStr = strings.TrimSpace(match[2])
 		}
 	}
 
@@ -903,7 +996,9 @@ func (a *Analyzer) inferFunctionReturnType(expr string) *TypeDef {
 		}
 	}
 
-	return a.parseTypeExpression(returnTypeStr)
+	// Build the function type string: (params) => returnType
+	funcType := fmt.Sprintf("(%s) => %s", params, returnTypeStr)
+	return &TypeDef{Kind: "function", Name: funcType}
 }
 
 // inferTernaryExpressionType infers the type from a ternary expression (cond ? a : b).
@@ -1142,6 +1237,32 @@ func (a *Analyzer) isStringConcatenation(expr string) bool {
 		}
 	}
 	return false
+}
+
+// inferEnumMemberAccess checks if the expression is an enum member access (e.g., Color.Green).
+// Returns a literal type with the full enum member path if it matches.
+func (a *Analyzer) inferEnumMemberAccess(expr string, code string) *TypeDef {
+	parts := strings.Split(expr, ".")
+	if len(parts) != 2 {
+		return nil
+	}
+
+	enumName := parts[0]
+	memberName := parts[1]
+
+	// Check if the base is an enum declaration
+	// Pattern: enum EnumName { ... }
+	enumPattern := regexp.MustCompile(`enum\s+` + regexp.QuoteMeta(enumName) + `\s*\{[^}]*\}`)
+	if enumPattern.MatchString(code) {
+		// Return the full enum member as a literal type (e.g., Color.Green)
+		return &TypeDef{
+			Kind:         "literal",
+			Name:         enumName,
+			LiteralValue: enumName + "." + memberName,
+		}
+	}
+
+	return nil
 }
 
 // inferMemberAccessType infers the type of a member access expression (e.g., config.apiUrl, Bun.nanoseconds()).
@@ -1746,14 +1867,13 @@ func (a *Analyzer) resolvePropertyPath(typeDef *TypeDef, path string) *TypeDef {
 // where varName: Record<string, SomeType> and we're accessing a property on SomeType
 func (a *Analyzer) inferIndexedRecordAccess(expr string, code string) *TypeDef {
 	// Match pattern: identifier[...].property
-	indexedAccessRe := regexp.MustCompile(`^(\w+)\[([^\]]+)\]\.(\w+)$`)
 	match := indexedAccessRe.FindStringSubmatch(expr)
 	if match == nil {
 		return nil
 	}
 
 	varName := match[1]
-	// keyExpr := match[2] // We don't need this for type inference
+	_ = match[2] // keyExpr - not needed for type inference
 	propName := match[3]
 
 	// Look for the variable type: const varName: Record<string, Type> = ...
@@ -2364,34 +2484,12 @@ func (a *Analyzer) inferArrayLiteralType(expr string, code string) *TypeDef {
 	}
 }
 
-// extractInputs finds global variable references in the code.
-// Note: We no longer extract inputs from `declare const/var/let` statements
-// because those are TypeScript ambient declarations for type checking, not
-// actual runtime inputs. Ambient declarations like `declare const Bun: ...`
-// are type hints for built-in globals, not user-provided data.
-func (a *Analyzer) extractInputs(code string) []Property {
-	// Return empty - ambient declarations are not inputs
-	return nil
-}
-
 // ToTypeScript generates TypeScript type definitions for the contract.
 func (c *Contract) ToTypeScript() string {
 	var sb strings.Builder
 
 	sb.WriteString("// Contract definition\n")
-	sb.WriteString(fmt.Sprintf("export type %s = %s;\n", c.Name, typeDefToTSFormatted(c.Type, 0)))
-
-	if len(c.Inputs) > 0 {
-		sb.WriteString("\nexport interface Inputs {\n")
-		for _, input := range c.Inputs {
-			req := ""
-			if !input.Required {
-				req = "?"
-			}
-			sb.WriteString(fmt.Sprintf("  %s%s: %s;\n", input.Name, req, typeDefToTS(input.Type)))
-		}
-		sb.WriteString("}\n")
-	}
+	fmt.Fprintf(&sb, "export type %s = %s;\n", c.Name, typeDefToTSFormatted(c.Type, 0))
 
 	return sb.String()
 }
@@ -2519,7 +2617,7 @@ func typeDefToTSFormatted(t *TypeDef, indent int) string {
 				if !p.Required {
 					req = "?"
 				}
-				sb.WriteString(fmt.Sprintf("%s%s%s: %s;\n", nextIndent, p.Name, req, typeDefToTSFormatted(p.Type, indent+1)))
+				fmt.Fprintf(&sb, "%s%s%s: %s;\n", nextIndent, p.Name, req, typeDefToTSFormatted(p.Type, indent+1))
 			}
 			sb.WriteString(indentStr + "}")
 			result = sb.String()
@@ -2572,6 +2670,9 @@ func typeDefToJSONSchema(t *TypeDef) *JSONSchema {
 			schema.Type = "number"
 		case "boolean":
 			schema.Type = "boolean"
+		case "undefined":
+			// undefined is represented as null in JSON Schema
+			schema.Type = "null"
 		case "any", "unknown":
 			// No type constraint
 		default:
@@ -2579,7 +2680,12 @@ func typeDefToJSONSchema(t *TypeDef) *JSONSchema {
 		}
 
 	case "literal":
-		schema.Const = t.LiteralValue
+		// Special handling for null literal
+		if t.Name == "null" {
+			schema.Type = "null"
+		} else {
+			schema.Const = t.LiteralValue
+		}
 
 	case "object":
 		schema.Type = "object"
@@ -2685,8 +2791,7 @@ func (a *Analyzer) inferReturnTypeFromFunctionBody(funcBody string, fullCode str
 	// We need to find the outermost return (not nested in closures)
 
 	// Simple approach: find "return " followed by an expression
-	returnRe := regexp.MustCompile(`(?m)^\s*return\s+`)
-	matches := returnRe.FindAllStringIndex(funcBody, -1)
+	matches := returnStmtRe.FindAllStringIndex(funcBody, -1)
 	if len(matches) == 0 {
 		return nil
 	}

@@ -123,8 +123,12 @@ func TestAnalyzeNullableType(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if !contract.Type.Nullable {
-		t.Error("expected nullable type")
+	// Nullable types are now represented as union types with null member
+	if contract.Type.Kind != "union" {
+		t.Errorf("expected union type, got %s", contract.Type.Kind)
+	}
+	if len(contract.Type.UnionTypes) != 2 {
+		t.Errorf("expected 2 union types, got %d", len(contract.Type.UnionTypes))
 	}
 }
 
@@ -162,11 +166,10 @@ func TestAnalyzeOptionalProperties(t *testing.T) {
 	}
 }
 
-func TestAnalyzeWithDeclaredInputs(t *testing.T) {
-	// Note: declare const/var/let statements are ambient type declarations in TypeScript
+func TestAnalyzeWithDeclaredGlobals(t *testing.T) {
+	// Note: declare const/var/let statements are ambient type declarations in TypeScript.
 	// They tell the compiler a global exists at runtime but don't create it.
-	// We no longer extract these as inputs because they're often used for
-	// typing built-in globals (like Bun, process, Buffer) rather than user-provided data.
+	// These are used for typing built-in globals (like Bun, process, Buffer).
 	code := `
 		declare const userId: number;
 		declare const userName: string;
@@ -180,9 +183,12 @@ func TestAnalyzeWithDeclaredInputs(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Expect 0 inputs - declare statements are type hints, not inputs
-	if len(contract.Inputs) != 0 {
-		t.Errorf("expected 0 inputs (declare statements are ambient declarations), got %d", len(contract.Inputs))
+	// Contract should still be created successfully with object type
+	if contract.Type == nil {
+		t.Fatal("expected type definition")
+	}
+	if contract.Type.Kind != "object" {
+		t.Errorf("expected object type, got %s", contract.Type.Kind)
 	}
 }
 
@@ -827,32 +833,32 @@ func TestAnalyzeAsyncFunctionExport(t *testing.T) {
 		{
 			name:         "async arrow function with Promise return type",
 			code:         `export default async (): Promise<string> => { return await 'abc'; };`,
-			expectedKind: "primitive",
-			expectedName: "string",
+			expectedKind: "function",
+			expectedName: "() => string",
 		},
 		{
 			name:         "async arrow function with Promise object return",
 			code:         `export default async (): Promise<{ status: string }> => { return { status: 'ok' }; };`,
-			expectedKind: "object",
-			expectedName: "",
+			expectedKind: "function",
+			expectedName: "() => { status: string }",
 		},
 		{
 			name:         "async function declaration",
 			code:         `export default async function(): Promise<number> { return 42; };`,
-			expectedKind: "primitive",
-			expectedName: "number",
+			expectedKind: "function",
+			expectedName: "() => number",
 		},
 		{
 			name:         "sync arrow function with return type",
 			code:         `export default (): string => { return 'abc'; };`,
-			expectedKind: "primitive",
-			expectedName: "string",
+			expectedKind: "function",
+			expectedName: "() => string",
 		},
 		{
 			name:         "sync function with return type",
 			code:         `export default function(): boolean { return true; };`,
-			expectedKind: "primitive",
-			expectedName: "boolean",
+			expectedKind: "function",
+			expectedName: "() => boolean",
 		},
 	}
 
