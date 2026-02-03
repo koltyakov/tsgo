@@ -12,6 +12,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
 )
 
 // ============================================================================
@@ -99,8 +102,89 @@ func MapLocation(sm *SourceMap, line, column int) (originalLine, originalColumn 
 }
 
 // MapError maps an error with JS location to TypeScript location.
+// It parses stack traces from GOJA errors and maps line/column numbers
+// back to the original TypeScript source locations.
 func MapError(err error, sm *SourceMap) error {
-	return err // Simplified - full implementation would parse error location
+	if err == nil || sm == nil {
+		return err
+	}
+
+	errStr := err.Error()
+	if errStr == "" {
+		return err
+	}
+
+	// Parse and map all locations in the error message
+	mappedStr := mapErrorLocations(errStr, sm)
+	if mappedStr == errStr {
+		// No mapping was possible, return original
+		return err
+	}
+
+	return &MappedError{
+		Original: err,
+		Message:  mappedStr,
+	}
+}
+
+// MappedError represents an error with mapped source locations.
+type MappedError struct {
+	Original error
+	Message  string
+}
+
+func (e *MappedError) Error() string {
+	return e.Message
+}
+
+func (e *MappedError) Unwrap() error {
+	return e.Original
+}
+
+// locationPattern matches common JavaScript stack trace location formats:
+// - "at <anonymous>:3:9" (GOJA format)
+// - "at functionName (file.js:10:5)" (standard format)
+// - "file.js:10:5" (simple format)
+var locationPattern = regexp.MustCompile(`(?:(?:at\s+)?\(?)([^:\s()]+)?:?(\d+):(\d+)\)?`)
+
+// mapErrorLocations finds and maps all locations in an error string.
+func mapErrorLocations(errStr string, sm *SourceMap) string {
+	var result strings.Builder
+	lastEnd := 0
+
+	for _, match := range locationPattern.FindAllStringSubmatchIndex(errStr, -1) {
+		// Write text between matches
+		result.WriteString(errStr[lastEnd:match[0]])
+
+		// Extract location components
+		// match[0], match[1] = full match
+		// match[2], match[3] = file name (optional)
+		// match[4], match[5] = line number
+		// match[6], match[7] = column number
+
+		lineStr := errStr[match[4]:match[5]]
+		colStr := errStr[match[6]:match[7]]
+
+		line, _ := strconv.Atoi(lineStr)
+		column, _ := strconv.Atoi(colStr)
+
+		// Map the location
+		origLine, origCol, source := MapLocation(sm, line, column)
+
+		// Build the mapped location string
+		if source != "" {
+			result.WriteString(fmt.Sprintf("%s:%d:%d", source, origLine, origCol))
+		} else {
+			result.WriteString(fmt.Sprintf("%d:%d", origLine, origCol))
+		}
+
+		lastEnd = match[1]
+	}
+
+	// Write remaining text
+	result.WriteString(errStr[lastEnd:])
+
+	return result.String()
 }
 
 // FormatError formats an error with source location.

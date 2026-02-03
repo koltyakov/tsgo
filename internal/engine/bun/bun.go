@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -208,23 +209,55 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 
 	start := time.Now()
 
+	// Execute with retry logic for process crashes
+	result, err := e.executeWithRetry(ctx, code, globals)
+	if err != nil {
+		return nil, err
+	}
+
+	result.Metrics.TotalTime = time.Since(start)
+	return result, nil
+}
+
+// executeWithRetry attempts to execute code with one retry on process failure.
+func (e *Engine) executeWithRetry(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {
+	start := time.Now()
+
 	// Get process from pool
 	proc, release, err := e.pool.acquire(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("failed to acquire bun process: %w", err)
 	}
-	defer release()
 
 	// Send execute request
 	resp, err := proc.execute(ctx, code, globals, e.config.Security)
+	release()
+
 	if err != nil {
-		return nil, err
+		// Check if this is a process crash (not a script error)
+		if isProcessCrash(err) {
+			// Mark process as failed - it will be recycled by health checker
+			atomic.AddInt32(&proc.failures, 100) // Force immediate recycling
+
+			// Retry once with a fresh process
+			proc2, release2, err2 := e.pool.acquire(ctx)
+			if err2 != nil {
+				return nil, fmt.Errorf("process crashed and retry failed: %w", err)
+			}
+			defer release2()
+
+			resp, err = proc2.execute(ctx, code, globals, e.config.Security)
+			if err != nil {
+				return nil, err
+			}
+		} else {
+			return nil, err
+		}
 	}
 
 	result := &types.Result{
 		Metrics: types.ExecutionMetrics{
 			ExecutionTime: time.Since(start),
-			TotalTime:     time.Since(start),
 		},
 		EngineUsed: types.EngineBun,
 	}
@@ -245,6 +278,29 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 
 	return result, nil
+}
+
+// isProcessCrash checks if an error indicates the process died unexpectedly.
+func isProcessCrash(err error) bool {
+	if err == nil {
+		return false
+	}
+	errStr := strings.ToLower(err.Error())
+	// Common indicators of process crashes
+	crashIndicators := []string{
+		"broken pipe",
+		"process died",
+		"connection reset",
+		"unexpected eof",
+		"write |",
+		"read |",
+	}
+	for _, indicator := range crashIndicators {
+		if strings.Contains(errStr, indicator) {
+			return true
+		}
+	}
+	return false
 }
 
 // ============================================================================

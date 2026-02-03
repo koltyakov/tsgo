@@ -8,6 +8,7 @@
 package types
 
 import (
+	"log/slog"
 	"time"
 )
 
@@ -148,7 +149,8 @@ type ExecutorConfig struct {
 	// Timeout sets the execution timeout.
 	Timeout Duration
 	// MemoryLimit sets the memory limit in bytes.
-	// NOTE: MemoryLimit is currently not enforced by the runtime.
+	// Deprecated: MemoryLimit is currently not enforced by the runtime.
+	// This field exists for future compatibility but has no effect.
 	MemoryLimit int64
 	// Globals are variables injected into the global scope.
 	Globals map[string]any
@@ -161,6 +163,14 @@ type ExecutorConfig struct {
 	SourceMaps bool
 	// PoolSize sets the worker pool size.
 	PoolSize int
+	// Logger is an optional logger for debug output.
+	// If nil, no debug logging is performed.
+	Logger *slog.Logger
+	// BackgroundWarmup starts Bun processes in background goroutines.
+	// When true, New() returns immediately and processes are warmed up
+	// in the background, reducing cold start latency from ~120ms to <1ms.
+	// Only applies when using the Bun engine.
+	BackgroundWarmup bool
 }
 
 // DefaultConfig returns the default executor configuration.
@@ -214,6 +224,24 @@ type ExecutionMetrics struct {
 	TotalTime time.Duration
 	// CacheHit indicates if the transpiled code was served from cache.
 	CacheHit bool
+}
+
+// ============================================================================
+// Executor Statistics
+// ============================================================================
+
+// ExecutorStats contains runtime statistics for the executor.
+type ExecutorStats struct {
+	// EngineConfigured is the engine type configured (Auto, GOJA, or Bun).
+	EngineConfigured EngineType
+	// GOJAActive indicates if the GOJA engine is initialized.
+	GOJAActive bool
+	// BunActive indicates if the Bun engine is initialized.
+	BunActive bool
+	// TranspilerCacheSize is the current number of entries in the transpiler cache.
+	TranspilerCacheSize int
+	// TranspilerCacheCapacity is the maximum capacity of the transpiler cache.
+	TranspilerCacheCapacity int
 }
 
 // ============================================================================

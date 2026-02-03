@@ -2,6 +2,7 @@ package sourcemap
 
 import (
 	"encoding/base64"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -76,7 +77,7 @@ func TestDecodeVLQ(t *testing.T) {
 }
 
 func TestDecodeMappings(t *testing.T) {
-	// Simple mapping: AAAA means (0,0,0,0)
+	// Simple mapping: AAAAA means (0,0,0,0)
 	mappings := decodeMappings("AAAA")
 
 	if len(mappings) == 0 {
@@ -86,5 +87,126 @@ func TestDecodeMappings(t *testing.T) {
 	m := mappings[0]
 	if m.GeneratedLine != 1 {
 		t.Errorf("expected generated line 1, got %d", m.GeneratedLine)
+	}
+}
+
+func TestMapError(t *testing.T) {
+	// Create a simple source map for testing
+	sm := &SourceMap{
+		Version:  3,
+		Sources:  []string{"test.ts"},
+		Mappings: "AAAA", // Simple identity mapping
+	}
+
+	tests := []struct {
+		name string
+		err  error
+	}{
+		{
+			name: "GOJA format error",
+			err:  errors.New(`ReferenceError: x is not defined at <anonymous>:1:5`),
+		},
+		{
+			name: "nil error",
+			err:  nil,
+		},
+		{
+			name: "error without location",
+			err:  errors.New(`generic error without location`),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := MapError(tt.err, sm)
+
+			if tt.err == nil {
+				if result != nil {
+					t.Errorf("expected nil for nil error, got %v", result)
+				}
+				return
+			}
+
+			if result == nil {
+				t.Fatal("expected mapped error, got nil")
+			}
+		})
+	}
+}
+
+func TestMapError_WithNilSourceMap(t *testing.T) {
+	err := errors.New("some error at 1:5")
+	result := MapError(err, nil)
+
+	// Should return original error when source map is nil
+	if result != err {
+		t.Error("expected original error when source map is nil")
+	}
+}
+
+func TestMappedError_Unwrap(t *testing.T) {
+	original := errors.New("original error")
+	mapped := &MappedError{
+		Original: original,
+		Message:  "mapped message",
+	}
+
+	if mapped.Error() != "mapped message" {
+		t.Errorf("expected 'mapped message', got %q", mapped.Error())
+	}
+
+	if mapped.Unwrap() != original {
+		t.Error("expected Unwrap to return original error")
+	}
+}
+
+func TestMapLocation(t *testing.T) {
+	tests := []struct {
+		name       string
+		mappings   string
+		line       int
+		col        int
+		wantLine   int
+		wantCol    int
+		wantSource string
+	}{
+		{
+			name:       "identity mapping",
+			mappings:   "AAAA",
+			line:       1,
+			col:        0,
+			wantLine:   1,
+			wantCol:    0,
+			wantSource: "test.ts",
+		},
+		{
+			name:       "no mapping returns input",
+			mappings:   "AAAA",
+			line:       999,
+			col:        999,
+			wantLine:   999,
+			wantCol:    999,
+			wantSource: "",
+		},
+		{
+			name:       "empty mappings",
+			mappings:   "",
+			line:       1,
+			col:        0,
+			wantLine:   1,
+			wantCol:    0,
+			wantSource: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			sm := &SourceMap{Version: 3, Sources: []string{"test.ts"}, Mappings: tt.mappings}
+			gotLine, gotCol, gotSource := MapLocation(sm, tt.line, tt.col)
+			if gotLine != tt.wantLine || gotCol != tt.wantCol || gotSource != tt.wantSource {
+				t.Errorf("MapLocation() = (%d, %d, %q), want (%d, %d, %q)",
+					gotLine, gotCol, gotSource, tt.wantLine, tt.wantCol, tt.wantSource)
+			}
+		})
 	}
 }

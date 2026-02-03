@@ -3,7 +3,9 @@ package tsgo
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"math"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -33,6 +35,33 @@ func TestNewWithOptions(t *testing.T) {
 	}
 	if executor.config.Timeout.Duration() != 5*time.Second {
 		t.Errorf("expected timeout 5s, got %v", executor.config.Timeout)
+	}
+}
+
+func TestWithDebugLogger(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	}))
+
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithDebugLogger(logger),
+	)
+	defer func() { _ = executor.Close() }()
+
+	if executor.config.Logger != logger {
+		t.Error("expected logger to be set")
+	}
+}
+
+func TestWithBackgroundWarmup(t *testing.T) {
+	executor := New(
+		WithBackgroundWarmup(true),
+	)
+	defer func() { _ = executor.Close() }()
+
+	if !executor.config.BackgroundWarmup {
+		t.Error("expected BackgroundWarmup to be true")
 	}
 }
 
@@ -541,5 +570,66 @@ func TestExecute_ComparisonExpression(t *testing.T) {
 				t.Errorf("expected %v, got %v", tt.expected, got)
 			}
 		})
+	}
+}
+
+func TestExecutorStats(t *testing.T) {
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithPoolSize(2),
+	)
+	defer func() { _ = executor.Close() }()
+
+	// Get initial stats (engine not yet initialized - lazy loading)
+	stats := executor.Stats()
+
+	if stats.EngineConfigured != EngineGOJA {
+		t.Errorf("expected engine GOJA, got %v", stats.EngineConfigured)
+	}
+
+	// Engine is lazily initialized, so it shouldn't be active yet
+	if stats.GOJAActive {
+		t.Error("expected GOJA to not be active before first execution")
+	}
+
+	if stats.BunActive {
+		t.Error("expected Bun to not be active")
+	}
+
+	// Execute something to initialize the engine
+	ctx := context.Background()
+	_, _ = executor.Execute(ctx, `export default 42;`)
+
+	// Get stats again after execution
+	stats = executor.Stats()
+	if !stats.GOJAActive {
+		t.Error("expected GOJA to be active after execution")
+	}
+}
+
+func TestExecutorStatsWithBun(t *testing.T) {
+	executor := New(
+		WithEngine(EngineBun),
+		WithPoolSize(1),
+	)
+	defer func() { _ = executor.Close() }()
+
+	// Execute to initialize Bun engine
+	ctx := context.Background()
+	_, _ = executor.Execute(ctx, `export default 1;`)
+
+	stats := executor.Stats()
+	if stats.EngineConfigured != EngineBun {
+		t.Errorf("expected engine Bun, got %v", stats.EngineConfigured)
+	}
+}
+
+func TestExecutorStatsWithAuto(t *testing.T) {
+	executor := New(WithEngine(EngineAuto))
+	defer func() { _ = executor.Close() }()
+
+	stats := executor.Stats()
+	if stats.EngineConfigured != EngineAuto {
+		t.Errorf("expected engine Auto, got %v", stats.EngineConfigured)
 	}
 }

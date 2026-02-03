@@ -30,6 +30,7 @@ package tsgo
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"maps"
 	"strings"
 	"sync"
@@ -73,6 +74,9 @@ type (
 	// FunctionDef defines a function injectable into the script context.
 	// It provides both Go (for GOJA) and TypeScript (for Bun) implementations.
 	FunctionDef = types.FunctionDef
+
+	// ExecutorStats contains runtime statistics for the executor.
+	ExecutorStats = types.ExecutorStats
 )
 
 // ============================================================================
@@ -141,6 +145,10 @@ func WithTimeout(d time.Duration) Option {
 }
 
 // WithMemoryLimit sets the memory limit in bytes.
+//
+// Deprecated: MemoryLimit is currently not enforced by the runtime.
+// This option exists for future compatibility but has no effect.
+// Use WithTimeout to limit execution time instead.
 func WithMemoryLimit(bytes int64) Option {
 	return func(c *types.ExecutorConfig) {
 		c.MemoryLimit = bytes
@@ -181,6 +189,40 @@ func WithSourceMaps(enabled bool) Option {
 func WithPoolSize(size int) Option {
 	return func(c *types.ExecutorConfig) {
 		c.PoolSize = size
+	}
+}
+
+// WithDebugLogger sets a logger for debug output.
+// This enables detailed logging of engine selection, transpilation,
+// cache hits/misses, and execution phases for troubleshooting.
+//
+// Example:
+//
+//	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+//	    Level: slog.LevelDebug,
+//	}))
+//	executor := tsgo.New(tsgo.WithDebugLogger(logger))
+func WithDebugLogger(logger *slog.Logger) Option {
+	return func(c *types.ExecutorConfig) {
+		c.Logger = logger
+	}
+}
+
+// WithBackgroundWarmup enables background warmup for the Bun engine.
+// When enabled, Bun worker processes are started in background goroutines,
+// allowing New() to return immediately (~1ms instead of ~120ms).
+// This is useful when low initialization latency is more important than
+// immediate readiness for the first request.
+//
+// Example:
+//
+//	executor := tsgo.New(
+//	    tsgo.WithEngine(tsgo.EngineBun),
+//	    tsgo.WithBackgroundWarmup(true),
+//	)
+func WithBackgroundWarmup(enabled bool) Option {
+	return func(c *types.ExecutorConfig) {
+		c.BackgroundWarmup = enabled
 	}
 }
 
@@ -229,6 +271,9 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 
 	// Select engine (needed for transpilation format decision)
 	engineType := e.selectEngine(codeToTranspile)
+	if e.config.Logger != nil {
+		e.config.Logger.Debug("engine selected", "engine", engineType.String())
+	}
 
 	// Check for unsupported features when GOJA is explicitly configured
 	if engineType == EngineGOJA {
@@ -242,6 +287,13 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	js, sourceMap, cacheHit, transpileTime, err := e.transpileCode(codeToTranspile, engineType, hasTopLevelAwait)
 	if err != nil {
 		return nil, e.wrapTranspileError(err, code)
+	}
+	if e.config.Logger != nil {
+		e.config.Logger.Debug("transpilation complete",
+			"cacheHit", cacheHit,
+			"transpileTime", transpileTime,
+			"hasTopLevelAwait", hasTopLevelAwait,
+		)
 	}
 
 	// Get or create engine
@@ -263,12 +315,25 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	// Execute
 	result, err := eng.Execute(execCtx, js, globals)
 	if err != nil {
+		if e.config.Logger != nil {
+			e.config.Logger.Debug("execution failed", "error", err.Error())
+		}
 		return nil, e.mapExecutionError(err, sourceMap, code)
 	}
 
 	result.Metrics.TranspileTime = transpileTime
 	result.Metrics.CacheHit = cacheHit
 	result.Metrics.TotalTime = time.Since(overallStart)
+
+	if e.config.Logger != nil {
+		e.config.Logger.Debug("execution complete",
+			"engine", engineType.String(),
+			"totalTime", result.Metrics.TotalTime,
+			"executionTime", result.Metrics.ExecutionTime,
+			"transpileTime", result.Metrics.TranspileTime,
+			"cacheHit", result.Metrics.CacheHit,
+		)
+	}
 
 	return result, nil
 }
@@ -484,8 +549,9 @@ func (e *Executor) getOrCreateBun() (*bun.Engine, error) {
 	// Double-check after acquiring write lock
 	if e.bunEng == nil {
 		eng, err := bun.New(bun.Config{
-			PoolSize: e.config.PoolSize,
-			Security: e.config.Security,
+			PoolSize:         e.config.PoolSize,
+			Security:         e.config.Security,
+			BackgroundWarmup: e.config.BackgroundWarmup,
 		})
 		if err != nil {
 			return nil, err
@@ -527,6 +593,24 @@ func (e *Executor) Close() error {
 	}
 
 	return errors.Join(errs...)
+}
+
+// Stats returns runtime statistics for the executor.
+// This is useful for monitoring, debugging, and capacity planning.
+//
+// Example:
+//
+//	stats := executor.Stats()
+//	fmt.Printf("Cache size: %d/%d\n", stats.TranspilerCacheSize, stats.TranspilerCacheCapacity)
+func (e *Executor) Stats() types.ExecutorStats {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	return types.ExecutorStats{
+		EngineConfigured: e.config.Engine,
+		GOJAActive:       e.gojaEng != nil,
+		BunActive:        e.bunEng != nil,
+	}
 }
 
 // ============================================================================

@@ -107,6 +107,9 @@ The platform can then map `route` to a workflow selector, `priority` to a queue,
 - **Source Map Support**: Error traces mapped back to original TypeScript line numbers
 - **Execution Isolation**: Each execution gets a clean context-no state leakage between runs
 - **Pooled Execution**: Pre-warmed runtime pools for both engines minimize latency
+- **Process Crash Recovery**: Automatic retry with fresh Bun process on worker crashes
+- **Debug Logging**: Optional structured logging for troubleshooting execution phases
+- **Runtime Introspection**: Query executor state and statistics at runtime
 
 ## Installation
 
@@ -193,7 +196,6 @@ See the [Benchmark Suite](internal/benchmark/README.md) for detailed comparison,
 executor := tsgo.New(
   tsgo.WithEngine(tsgo.EngineGOJA),      // Engine: EngineAuto (default), EngineGOJA, EngineBun
   tsgo.WithTimeout(10*time.Second),      // Execution timeout
-  tsgo.WithMemoryLimit(64*1024*1024),    // Memory limit in bytes (64MB)
   tsgo.WithGlobals(map[string]any{       // Global variables available to scripts
     "userId": 123,
     "config": map[string]any{"debug": true},
@@ -208,13 +210,14 @@ executor := tsgo.New(
   }),
   tsgo.WithSourceMaps(true),             // Enable source map generation for error traces
   tsgo.WithPoolSize(4),                  // Worker pool size (default: NumCPU)
+  tsgo.WithBackgroundWarmup(true),       // Start Bun processes in background (reduces init latency)
+  tsgo.WithDebugLogger(logger),          // Enable debug logging (slog.Logger)
 )
 defer executor.Close()  // Always close to release resources
 ```
 
-> Note: `MemoryLimit` is currently not enforced by the runtime. `SecurityPolicy`
-> enforcement is limited to RestrictedGlobals/AllowedGlobals checks and Bun
-> `NetworkAccess` (for `fetch`/`WebSocket`).
+> **Note:** `SecurityPolicy` enforcement is limited to `RestrictedGlobals`/`AllowedGlobals` 
+> checks and Bun `NetworkAccess` (for `fetch`/`WebSocket`).
 
 ### Security Policy Allowlist
 
@@ -234,7 +237,7 @@ executor := tsgo.New(
 
 ### Execution Metrics & Logs
 
-`Result.Metrics` now includes `TranspileTime` and `CacheHit` to help profile
+`Result.Metrics` includes `TranspileTime` and `CacheHit` to help profile
 TypeScript compilation overhead. For Bun executions, `Result.Logs` captures
 `console.*` output from the worker (without corrupting the RPC channel).
 
@@ -243,6 +246,59 @@ result, _ := executor.Execute(ctx, code)
 fmt.Println(result.Metrics.TranspileTime, result.Metrics.CacheHit)
 fmt.Println(result.Logs)
 ```
+
+### Debug Logging
+
+Enable structured debug logging to troubleshoot execution phases:
+
+```go
+logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
+    Level: slog.LevelDebug,
+}))
+
+executor := tsgo.New(
+    tsgo.WithDebugLogger(logger),
+)
+
+// Logs include:
+// - Engine selection decisions
+// - Transpilation cache hits/misses
+// - Execution timing breakdown
+// - Error details with source mapping
+```
+
+### Runtime Introspection
+
+Query executor statistics for monitoring and debugging:
+
+```go
+stats := executor.Stats()
+
+fmt.Printf("Engine configured: %v\n", stats.EngineConfigured)
+fmt.Printf("GOJA active: %v\n", stats.GOJAActive)
+fmt.Printf("Bun active: %v\n", stats.BunActive)
+```
+
+This is useful for:
+- Health checks and monitoring dashboards
+- Capacity planning (tracking engine initialization)
+- Debugging engine selection issues
+
+### Background Warmup (Bun Engine)
+
+When using the Bun engine, you can reduce initialization latency from ~120ms to <1ms
+by enabling background warmup:
+
+```go
+executor := tsgo.New(
+    tsgo.WithEngine(tsgo.EngineBun),
+    tsgo.WithBackgroundWarmup(true),  // Processes start in background goroutines
+)
+// New() returns immediately, first request may wait for process startup
+```
+
+This is ideal for services where fast startup is more important than immediate
+readiness for the first request.
 
 ### Injecting Functions
 
@@ -342,6 +398,48 @@ result, _ := executor.Execute(ctx, `typeof globalThis.processASecret`)
 - Process pool reuses worker processes, but execution contexts are isolated
 
 This design allows high-performance pooled execution while maintaining strict isolation-critical for workflow engines, multi-tenant SaaS, and security-sensitive applications.
+
+## Error Handling
+
+### Source Map Error Mapping
+
+When `WithSourceMaps(true)` is enabled, runtime errors are automatically mapped
+back to original TypeScript line numbers:
+
+```go
+executor := tsgo.New(
+    tsgo.WithSourceMaps(true),
+)
+
+_, err := executor.Execute(ctx, `
+    function calculate() {
+        throw new Error("Something went wrong");
+    }
+    calculate();
+`)
+// Error message will show TypeScript line numbers, not transpiled JavaScript
+```
+
+The `ExecutionError` type provides structured error information:
+
+```go
+if execErr, ok := err.(*tsgo.ExecutionError); ok {
+    fmt.Println(execErr.Message)  // Error message
+    fmt.Println(execErr.Stack)    // Stack trace (if available)
+    // Original source location available when source maps enabled
+}
+```
+
+### Process Crash Recovery (Bun Engine)
+
+The Bun engine automatically recovers from worker process crashes:
+
+- Detects process failures (broken pipe, unexpected EOF, etc.)
+- Automatically retries execution with a fresh process
+- Marks crashed processes for immediate recycling
+- Provides clear error messages if retry also fails
+
+This ensures resilience against Bun worker instability without manual intervention.
 
 ## Script Results Interpretation
 

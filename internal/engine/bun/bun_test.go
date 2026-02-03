@@ -2,6 +2,7 @@ package bun
 
 import (
 	"context"
+	"errors"
 	"os/exec"
 	"sync"
 	"testing"
@@ -158,6 +159,59 @@ func TestBunEngineNotAvailable(t *testing.T) {
 
 	if engine.IsAvailable() {
 		t.Error("engine should not be available with nonexistent executable")
+	}
+}
+
+func TestIsProcessCrash(t *testing.T) {
+	tests := []struct {
+		name     string
+		err      error
+		expected bool
+	}{
+		{
+			name:     "nil error",
+			err:      nil,
+			expected: false,
+		},
+		{
+			name:     "broken pipe",
+			err:      errors.New("write |1: broken pipe"),
+			expected: true,
+		},
+		{
+			name:     "connection reset",
+			err:      errors.New("read tcp: connection reset by peer"),
+			expected: true,
+		},
+		{
+			name:     "unexpected EOF",
+			err:      errors.New("unexpected EOF"),
+			expected: true,
+		},
+		{
+			name:     "process died",
+			err:      errors.New("process died"),
+			expected: true,
+		},
+		{
+			name:     "normal script error",
+			err:      errors.New("ReferenceError: x is not defined"),
+			expected: false,
+		},
+		{
+			name:     "timeout error",
+			err:      context.DeadlineExceeded,
+			expected: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := isProcessCrash(tt.err)
+			if got != tt.expected {
+				t.Errorf("isProcessCrash(%q) = %v, want %v", tt.err, got, tt.expected)
+			}
+		})
 	}
 }
 
