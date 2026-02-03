@@ -62,7 +62,6 @@ type Inferrer struct {
 	workerPath string
 	tempDir    string
 	closed     atomic.Bool
-	mu         sync.Mutex
 }
 
 // NewInferrer creates a new type inferrer with a worker pool

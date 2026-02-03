@@ -201,11 +201,41 @@ executor := tsgo.New(
   }),
   tsgo.WithSecurity(tsgo.SecurityPolicy{
     RestrictedGlobals: []string{"eval", "Function"},  // Block dangerous globals
+    AllowedGlobals:    []string{"fetch"},              // Explicit allowlist overrides
+    NetworkAccess:     true,                            // Enable fetch/WebSocket in Bun
   }),
   tsgo.WithSourceMaps(true),             // Enable source map generation for error traces
   tsgo.WithPoolSize(4),                  // Worker pool size (default: NumCPU)
 )
 defer executor.Close()  // Always close to release resources
+```
+
+### Security Policy Allowlist
+
+`SecurityPolicy.AllowedGlobals` lets you opt-in to specific restricted globals
+without weakening the default policy for everything else. This is useful for
+explicitly enabling things like `fetch` in Bun-only samples.
+
+```go
+executor := tsgo.New(
+  tsgo.WithSecurity(tsgo.SecurityPolicy{
+    RestrictedGlobals: tsgo.DefaultSecurityPolicy().RestrictedGlobals,
+    AllowedGlobals:    []string{"fetch", "process"},
+    NetworkAccess:     true,
+  }),
+)
+```
+
+### Execution Metrics & Logs
+
+`Result.Metrics` now includes `TranspileTime` and `CacheHit` to help profile
+TypeScript compilation overhead. For Bun executions, `Result.Logs` captures
+`console.*` output from the worker (without corrupting the RPC channel).
+
+```go
+result, _ := executor.Execute(ctx, code)
+fmt.Println(result.Metrics.TranspileTime, result.Metrics.CacheHit)
+fmt.Println(result.Logs)
 ```
 
 ### Injecting Functions

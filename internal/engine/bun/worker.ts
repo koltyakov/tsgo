@@ -10,6 +10,9 @@ declare const Bun: {
 
 declare const process: {
   exit(code?: number): never;
+  stdout: {
+    write(data: string): void;
+  };
 };
 
 interface RpcRequest {
@@ -17,6 +20,7 @@ interface RpcRequest {
   method: string;
   code?: string;
   context?: Record<string, unknown>;
+  policy?: SecurityPolicy;
 }
 
 interface RpcResponse {
@@ -26,6 +30,7 @@ interface RpcResponse {
     message: string;
     stack?: string;
   };
+  logs?: string[];
   metrics?: {
     executionTimeMs: number;
   };
@@ -36,13 +41,57 @@ interface SecurityPolicy {
   diskAccess?: boolean;
 }
 
+let currentLogs: string[] = [];
+
+function safeStringify(value: unknown): string {
+  if (typeof value === 'string') {
+    return value;
+  }
+  if (value === null) {
+    return 'null';
+  }
+  if (value === undefined) {
+    return 'undefined';
+  }
+  if (typeof value === 'number' || typeof value === 'boolean' || typeof value === 'bigint') {
+    return String(value);
+  }
+  try {
+    return JSON.stringify(value);
+  } catch {
+    return String(value);
+  }
+}
+
+function logWithLevel(level: string, args: unknown[]): void {
+  const line = args.map(safeStringify).join(' ');
+  currentLogs.push(`${level}: ${line}`);
+}
+
+// Override console to prevent stdout corruption of the RPC channel
+// and capture logs for the response payload.
+(globalThis as Record<string, unknown>).console = {
+  log: (...args: unknown[]) => logWithLevel('log', args),
+  info: (...args: unknown[]) => logWithLevel('info', args),
+  warn: (...args: unknown[]) => logWithLevel('warn', args),
+  error: (...args: unknown[]) => logWithLevel('error', args),
+};
+
 // Security: Remove dangerous globals if restricted
 // eslint-disable-next-line @typescript-eslint/no-unused-vars
-function applySecurityPolicy(policy: SecurityPolicy): void {
+function applySecurityPolicy(policy?: SecurityPolicy): void {
+  if (!policy) {
+    return;
+  }
+
   if (!policy.networkAccess) {
     // Intentionally removing network globals for sandboxing
     (globalThis as Record<string, unknown>).fetch = undefined;
     (globalThis as Record<string, unknown>).WebSocket = undefined;
+  } else {
+    // Restore network globals if they were disabled in a previous run
+    (globalThis as Record<string, unknown>).fetch = baseFetch;
+    (globalThis as Record<string, unknown>).WebSocket = baseWebSocket;
   }
 
   if (!policy.diskAccess) {
@@ -53,6 +102,8 @@ function applySecurityPolicy(policy: SecurityPolicy): void {
 
 // Capture base globalThis keys at startup for isolation cleanup
 const baseGlobalKeys = new Set(Object.keys(globalThis));
+const baseFetch = (globalThis as Record<string, unknown>).fetch;
+const baseWebSocket = (globalThis as Record<string, unknown>).WebSocket;
 
 // Clean up any globals added during execution (context isolation)
 function cleanupGlobals(): void {
@@ -223,12 +274,15 @@ async function handleRequest(request: RpcRequest): Promise<RpcResponse> {
         }
         
         try {
+          currentLogs = [];
+          applySecurityPolicy(request.policy);
           const result = await executeCode(request.code, request.context || {});
           const executionTimeMs = performance.now() - startTime;
           
           return {
             id: request.id,
             result,
+            logs: currentLogs,
             metrics: { executionTimeMs }
           };
         } finally {
@@ -261,7 +315,7 @@ async function handleRequest(request: RpcRequest): Promise<RpcResponse> {
 // Send response to stdout
 function sendResponse(response: RpcResponse): void {
   const json = JSON.stringify(response);
-  console.log(json);
+  process.stdout.write(`${json}\n`);
 }
 
 // Read and process requests from stdin

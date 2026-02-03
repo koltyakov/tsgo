@@ -194,6 +194,9 @@ func New(opts ...Option) *Executor {
 	for _, opt := range opts {
 		opt(&config)
 	}
+	if config.Security.RestrictedGlobals == nil {
+		config.Security.RestrictedGlobals = sandbox.RestrictedGlobals()
+	}
 
 	return &Executor{
 		config:     config,
@@ -209,6 +212,8 @@ func New(opts ...Option) *Executor {
 // Execute runs TypeScript code and returns the result.
 // It is safe for concurrent use.
 func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
+	overallStart := time.Now()
+
 	if err := e.validateExecutionState(code); err != nil {
 		return nil, err
 	}
@@ -223,18 +228,18 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	codeToTranspile, goFunctions := e.prepareFunctions(code)
 
 	// Select engine (needed for transpilation format decision)
-	engineType := e.selectEngine(code)
+	engineType := e.selectEngine(codeToTranspile)
 
 	// Check for unsupported features when GOJA is explicitly configured
 	if engineType == EngineGOJA {
-		if err := e.validateGOJAFeatures(code); err != nil {
+		if err := e.validateGOJAFeatures(codeToTranspile); err != nil {
 			return nil, err
 		}
 	}
 
 	// Transpile TypeScript to JavaScript
-	hasTopLevelAwait := goja.ContainsTopLevelAwait(code)
-	js, sourceMap, err := e.transpileCode(codeToTranspile, engineType, hasTopLevelAwait)
+	hasTopLevelAwait := goja.ContainsTopLevelAwait(codeToTranspile)
+	js, sourceMap, cacheHit, transpileTime, err := e.transpileCode(codeToTranspile, engineType, hasTopLevelAwait)
 	if err != nil {
 		return nil, e.wrapTranspileError(err, code)
 	}
@@ -246,7 +251,8 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	}
 
 	// Prepare execution context and globals
-	execCtx := e.prepareContext(ctx)
+	execCtx, cancel := e.prepareContext(ctx)
+	defer cancel()
 	globals := e.prepareGlobals(goFunctions, engineType)
 
 	// Final context check before execution
@@ -259,6 +265,10 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	if err != nil {
 		return nil, e.mapExecutionError(err, sourceMap, code)
 	}
+
+	result.Metrics.TranspileTime = transpileTime
+	result.Metrics.CacheHit = cacheHit
+	result.Metrics.TotalTime = time.Since(overallStart)
 
 	return result, nil
 }
@@ -280,13 +290,39 @@ func (e *Executor) validateExecutionState(code string) error {
 
 // validateSecurity checks the code against security policy.
 func (e *Executor) validateSecurity(code string) error {
-	if err := sandbox.ValidateCode(code, e.config.Security.RestrictedGlobals); err != nil {
+	restricted := e.config.Security.RestrictedGlobals
+	if len(e.config.Security.AllowedGlobals) > 0 {
+		restricted = filterRestrictedGlobals(restricted, e.config.Security.AllowedGlobals)
+	}
+
+	if err := sandbox.ValidateCode(code, restricted); err != nil {
 		return &ExecutionError{
 			Message: err.Error(),
 			Code:    code,
 		}
 	}
 	return nil
+}
+
+func filterRestrictedGlobals(restricted, allowed []string) []string {
+	if len(restricted) == 0 || len(allowed) == 0 {
+		return restricted
+	}
+
+	allowedSet := make(map[string]struct{}, len(allowed))
+	for _, name := range allowed {
+		allowedSet[name] = struct{}{}
+	}
+
+	filtered := make([]string, 0, len(restricted))
+	for _, name := range restricted {
+		if _, ok := allowedSet[name]; ok {
+			continue
+		}
+		filtered = append(filtered, name)
+	}
+
+	return filtered
 }
 
 // validateGOJAFeatures checks for features unsupported by the GOJA engine.
@@ -331,7 +367,7 @@ func (e *Executor) selectEngine(code string) EngineType {
 }
 
 // transpileCode converts TypeScript to JavaScript.
-func (e *Executor) transpileCode(code string, engineType EngineType, hasTopLevelAwait bool) (js, sourceMap string, err error) {
+func (e *Executor) transpileCode(code string, engineType EngineType, hasTopLevelAwait bool) (js, sourceMap string, cacheHit bool, transpileTime time.Duration, err error) {
 	// Use ESM format for Bun with top-level await (IIFE doesn't support it)
 	if engineType == EngineBun && hasTopLevelAwait {
 		return e.transpiler.TranspileESM(code)
@@ -348,11 +384,11 @@ func (e *Executor) wrapTranspileError(err error, code string) error {
 }
 
 // prepareContext creates an execution context with timeout if configured.
-func (e *Executor) prepareContext(ctx context.Context) context.Context {
+func (e *Executor) prepareContext(ctx context.Context) (context.Context, context.CancelFunc) {
 	if e.config.Timeout > 0 {
-		ctx, _ = context.WithTimeout(ctx, e.config.Timeout.Duration())
+		return context.WithTimeout(ctx, e.config.Timeout.Duration())
 	}
-	return ctx
+	return ctx, func() {}
 }
 
 // prepareGlobals merges globals with Go functions for the selected engine.
@@ -449,6 +485,7 @@ func (e *Executor) getOrCreateBun() (*bun.Engine, error) {
 	if e.bunEng == nil {
 		eng, err := bun.New(bun.Config{
 			PoolSize: e.config.PoolSize,
+			Security: e.config.Security,
 		})
 		if err != nil {
 			return nil, err

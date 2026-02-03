@@ -60,15 +60,18 @@ func (d Duration) Duration() time.Duration {
 // SecurityPolicy defines the security constraints for script execution.
 type SecurityPolicy struct {
 	// NetworkAccess allows the script to make network requests.
-	NetworkAccess bool
+	NetworkAccess bool `json:"networkAccess,omitempty"`
 	// DiskAccess allows the script to read/write files.
-	DiskAccess bool
+	DiskAccess bool `json:"diskAccess,omitempty"`
 	// AllowedPaths restricts file access to these paths (if DiskAccess is true).
-	AllowedPaths []string
+	AllowedPaths []string `json:"allowedPaths,omitempty"`
 	// RestrictedGlobals are globals that should be blocked from scripts.
-	RestrictedGlobals []string
+	RestrictedGlobals []string `json:"restrictedGlobals,omitempty"`
+	// AllowedGlobals are restricted globals that are explicitly allowed.
+	// This provides an opt-in escape hatch for specific globals like "fetch" or "process".
+	AllowedGlobals []string `json:"allowedGlobals,omitempty"`
 	// MaxExecutionTime limits script execution time.
-	MaxExecutionTime time.Duration
+	MaxExecutionTime time.Duration `json:"maxExecutionTime,omitempty"`
 }
 
 // Default security policy values.

@@ -15,7 +15,7 @@ func TestNew(t *testing.T) {
 func TestTranspile_SimpleExpression(t *testing.T) {
 	tr := New()
 
-	js, _, err := tr.Transpile("const x: number = 42;")
+	js, _, _, _, err := tr.Transpile("const x: number = 42;")
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -37,7 +37,7 @@ func TestTranspile_TypeScriptSyntax(t *testing.T) {
 		const user: User = { name: "Alice", age: 30 };
 	`
 
-	js, _, err := tr.Transpile(code)
+	js, _, _, _, err := tr.Transpile(code)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -56,7 +56,7 @@ func TestTranspile_ArrowFunction(t *testing.T) {
 	tr := New()
 
 	code := `const add = (a: number, b: number): number => a + b;`
-	js, _, err := tr.Transpile(code)
+	js, _, _, _, err := tr.Transpile(code)
 
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
@@ -69,7 +69,7 @@ func TestTranspile_ArrowFunction(t *testing.T) {
 func TestTranspile_SyntaxError(t *testing.T) {
 	tr := New()
 
-	_, _, err := tr.Transpile("const x: = ")
+	_, _, _, _, err := tr.Transpile("const x: = ")
 
 	if err == nil {
 		t.Error("expected syntax error")
@@ -82,13 +82,13 @@ func TestTranspile_Caching(t *testing.T) {
 	code := "const x = 1;"
 
 	// First call
-	js1, _, err := tr.Transpile(code)
+	js1, _, _, _, err := tr.Transpile(code)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
 	// Second call should use cache
-	js2, _, err := tr.Transpile(code)
+	js2, _, _, _, err := tr.Transpile(code)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -102,12 +102,12 @@ func TestClearCache(t *testing.T) {
 	tr := New()
 
 	code := "const x = 1;"
-	_, _, _ = tr.Transpile(code)
+	_, _, _, _, _ = tr.Transpile(code)
 
 	tr.ClearCache()
 
 	// Should still work after clearing cache
-	_, _, err := tr.Transpile(code)
+	_, _, _, _, err := tr.Transpile(code)
 	if err != nil {
 		t.Fatalf("unexpected error after cache clear: %v", err)
 	}

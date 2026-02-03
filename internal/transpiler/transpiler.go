@@ -10,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/evanw/esbuild/pkg/api"
 )
@@ -29,6 +30,7 @@ const DefaultCacheSize = 1000
 type Transpiler struct {
 	cache     *lruCache
 	cacheSize int
+	mu        sync.RWMutex
 }
 
 // New creates a new TypeScript transpiler.
@@ -53,10 +55,12 @@ func NewWithCacheSize(size int) *Transpiler {
 // Transpile converts TypeScript code to JavaScript.
 // Returns the JavaScript code and source map.
 // This method is safe for concurrent use.
-func (t *Transpiler) Transpile(code string) (string, string, error) {
+func (t *Transpiler) Transpile(code string) (string, string, bool, time.Duration, error) {
 	if len(code) == 0 {
-		return "", "", &TranspileError{Message: "code cannot be empty"}
+		return "", "", false, 0, &TranspileError{Message: "code cannot be empty"}
 	}
+
+	start := time.Now()
 
 	// Preprocess: if no export default, wrap trailing expression
 	code = preprocessTrailingExpression(code)
@@ -65,9 +69,13 @@ func (t *Transpiler) Transpile(code string) (string, string, error) {
 	hash := hashCode(code)
 
 	// Check cache (thread-safe)
-	if cached, ok := t.cache.get(hash); ok {
+	t.mu.RLock()
+	cache := t.cache
+	t.mu.RUnlock()
+
+	if cached, ok := cache.get(hash); ok {
 		result := cached.(*transpileResult)
-		return result.code, result.sourceMap, nil
+		return result.code, result.sourceMap, true, time.Since(start), nil
 	}
 
 	// Transpile using esbuild
@@ -86,7 +94,7 @@ func (t *Transpiler) Transpile(code string) (string, string, error) {
 
 	if len(result.Errors) > 0 {
 		err := result.Errors[0]
-		return "", "", &TranspileError{
+		return "", "", false, time.Since(start), &TranspileError{
 			Message: err.Text,
 			Line:    err.Location.Line,
 			Column:  err.Location.Column,
@@ -97,22 +105,24 @@ func (t *Transpiler) Transpile(code string) (string, string, error) {
 	sourceMap := extractInlineSourceMap(jsCode)
 
 	// Cache result (thread-safe)
-	t.cache.put(hash, &transpileResult{
+	cache.put(hash, &transpileResult{
 		code:      jsCode,
 		sourceMap: sourceMap,
 	})
 
-	return jsCode, sourceMap, nil
+	return jsCode, sourceMap, false, time.Since(start), nil
 }
 
 // TranspileESM converts TypeScript code to JavaScript using ESM format.
 // This is needed for top-level await support (IIFE doesn't support it).
 // Returns the JavaScript code and source map.
 // This method is safe for concurrent use.
-func (t *Transpiler) TranspileESM(code string) (string, string, error) {
+func (t *Transpiler) TranspileESM(code string) (string, string, bool, time.Duration, error) {
 	if len(code) == 0 {
-		return "", "", &TranspileError{Message: "code cannot be empty"}
+		return "", "", false, 0, &TranspileError{Message: "code cannot be empty"}
 	}
+
+	start := time.Now()
 
 	// Preprocess: if no export default, wrap trailing expression
 	code = preprocessTrailingExpression(code)
@@ -121,9 +131,13 @@ func (t *Transpiler) TranspileESM(code string) (string, string, error) {
 	hash := hashCode(code + ":esm")
 
 	// Check cache (thread-safe)
-	if cached, ok := t.cache.get(hash); ok {
+	t.mu.RLock()
+	cache := t.cache
+	t.mu.RUnlock()
+
+	if cached, ok := cache.get(hash); ok {
 		result := cached.(*transpileResult)
-		return result.code, result.sourceMap, nil
+		return result.code, result.sourceMap, true, time.Since(start), nil
 	}
 
 	// Transpile using esbuild with ESM format
@@ -141,7 +155,7 @@ func (t *Transpiler) TranspileESM(code string) (string, string, error) {
 
 	if len(result.Errors) > 0 {
 		err := result.Errors[0]
-		return "", "", &TranspileError{
+		return "", "", false, time.Since(start), &TranspileError{
 			Message: err.Text,
 			Line:    err.Location.Line,
 			Column:  err.Location.Column,
@@ -152,18 +166,20 @@ func (t *Transpiler) TranspileESM(code string) (string, string, error) {
 	sourceMap := extractInlineSourceMap(jsCode)
 
 	// Cache result (thread-safe)
-	t.cache.put(hash, &transpileResult{
+	cache.put(hash, &transpileResult{
 		code:      jsCode,
 		sourceMap: sourceMap,
 	})
 
-	return jsCode, sourceMap, nil
+	return jsCode, sourceMap, false, time.Since(start), nil
 }
 
 // ClearCache clears the transpilation cache.
 // This method is safe for concurrent use.
 func (t *Transpiler) ClearCache() {
+	t.mu.Lock()
 	t.cache = newLRUCache(t.cacheSize)
+	t.mu.Unlock()
 }
 
 // ============================================================================

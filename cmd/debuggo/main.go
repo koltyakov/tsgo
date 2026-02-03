@@ -1,13 +1,13 @@
 package main
 
 import (
-"fmt"
-"github.com/koltyakov/tsgo/internal/contract"
+	"fmt"
+	"github.com/koltyakov/tsgo/internal/contract"
 )
 
 func main() {
 	analyzer := contract.NewAnalyzer()
-	
+
 	tests := []struct {
 		name string
 		code string

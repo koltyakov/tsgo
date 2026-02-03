@@ -73,6 +73,8 @@ type Config struct {
 	// New() returns immediately; first request may wait for process startup.
 	// This reduces cold start from ~120ms to <1ms.
 	BackgroundWarmup bool
+	// Security defines the security policy for execution.
+	Security types.SecurityPolicy
 }
 
 // ============================================================================
@@ -214,7 +216,7 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	defer release()
 
 	// Send execute request
-	resp, err := proc.execute(ctx, code, globals)
+	resp, err := proc.execute(ctx, code, globals, e.config.Security)
 	if err != nil {
 		return nil, err
 	}
@@ -235,6 +237,9 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	}
 
 	result.Value = resp.Result
+	if len(resp.Logs) > 0 {
+		result.Logs = resp.Logs
+	}
 	if resp.Metrics != nil {
 		result.Metrics.ExecutionTime = time.Duration(resp.Metrics.ExecutionTimeMs * float64(time.Millisecond))
 	}
@@ -329,16 +334,18 @@ type process struct {
 
 // request represents a JSON-RPC request to the worker.
 type request struct {
-	ID      string         `json:"id"`
-	Method  string         `json:"method"`
-	Code    string         `json:"code,omitempty"`
-	Context map[string]any `json:"context,omitempty"`
+	ID      string               `json:"id"`
+	Method  string               `json:"method"`
+	Code    string               `json:"code,omitempty"`
+	Context map[string]any       `json:"context,omitempty"`
+	Policy  types.SecurityPolicy `json:"policy,omitempty"`
 }
 
 // response represents a JSON-RPC response from the worker.
 type response struct {
-	ID     string `json:"id"`
-	Result any    `json:"result,omitempty"`
+	ID     string   `json:"id"`
+	Result any      `json:"result,omitempty"`
+	Logs   []string `json:"logs,omitempty"`
 	Error  *struct {
 		Message string `json:"message"`
 		Stack   string `json:"stack,omitempty"`
@@ -758,7 +765,7 @@ func (p *pool) close() {
 
 // execute sends code to the Bun process for execution and waits for the result.
 // It tracks request counts for process recycling decisions.
-func (proc *process) execute(ctx context.Context, code string, context map[string]any) (*response, error) {
+func (proc *process) execute(ctx context.Context, code string, context map[string]any, policy types.SecurityPolicy) (*response, error) {
 	// Use strconv for faster ID generation
 	id := "exec-" + strconv.FormatInt(atomic.AddInt64(&proc.requestID, 1), 10)
 
@@ -770,6 +777,7 @@ func (proc *process) execute(ctx context.Context, code string, context map[strin
 		Method:  "execute",
 		Code:    code,
 		Context: context,
+		Policy:  policy,
 	})
 }
 

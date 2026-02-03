@@ -320,7 +320,7 @@ func BenchmarkGOJA(b *testing.B) {
 			continue // GOJA doesn't support async
 		}
 
-		transpiled, _, err := trans.Transpile(tc.code)
+		transpiled, _, _, _, err := trans.Transpile(tc.code)
 		if err != nil {
 			b.Logf("GOJA: %s - transpile error: %v", tc.name, err)
 			continue
@@ -378,7 +378,7 @@ func BenchmarkConcurrent(b *testing.B) {
 	ctx := context.Background()
 	code := testCases["array_operations"].code
 
-	transpiled, _, err := trans.Transpile(code)
+	transpiled, _, _, _, err := trans.Transpile(code)
 	if err != nil {
 		b.Fatalf("transpile error: %v", err)
 	}
@@ -446,7 +446,7 @@ func BenchmarkTranspiler(b *testing.B) {
 		b.Run("Transpile_"+id, func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _, err := trans.Transpile(tc.code)
+				_, _, _, _, err := trans.Transpile(tc.code)
 				if err != nil {
 					b.Fatalf("transpile error: %v", err)
 				}
@@ -454,11 +454,11 @@ func BenchmarkTranspiler(b *testing.B) {
 		})
 
 		// Warm the cache for cached benchmark
-		_, _, _ = transWithCache.Transpile(tc.code)
+		_, _, _, _, _ = transWithCache.Transpile(tc.code)
 		b.Run("Transpile_Cached_"+id, func(b *testing.B) {
 			b.ResetTimer()
 			for i := 0; i < b.N; i++ {
-				_, _, err := transWithCache.Transpile(tc.code)
+				_, _, _, _, err := transWithCache.Transpile(tc.code)
 				if err != nil {
 					b.Fatalf("transpile error: %v", err)
 				}
@@ -498,7 +498,7 @@ func TestFeatureSupport(t *testing.T) {
 
 		// Test GOJA
 		if !tc.needsAsync {
-			transpiled, _, err := trans.Transpile(tc.code)
+			transpiled, _, _, _, err := trans.Transpile(tc.code)
 			if err == nil {
 				_, err = gojaEngine.Execute(ctx, transpiled, tc.globals)
 				if err == nil {
@@ -558,7 +558,7 @@ func TestPerformanceComparison(t *testing.T) {
 		var gojaTime, bunTime time.Duration
 
 		// Benchmark GOJA
-		transpiled, _, err := trans.Transpile(tc.code)
+		transpiled, _, _, _, err := trans.Transpile(tc.code)
 		if err != nil {
 			continue
 		}
@@ -611,7 +611,7 @@ func TestConcurrencyScaling(t *testing.T) {
 	ctx := context.Background()
 	code := testCases["nested_loops"].code
 
-	transpiled, _, err := trans.Transpile(code)
+	transpiled, _, _, _, err := trans.Transpile(code)
 	if err != nil {
 		t.Fatalf("transpile error: %v", err)
 	}
@@ -651,7 +651,7 @@ func TestConcurrencyScaling(t *testing.T) {
 func BenchmarkColdStart(b *testing.B) {
 	code := testCases["simple_arithmetic"].code
 	trans := transpiler.New()
-	transpiled, _, _ := trans.Transpile(code)
+	transpiled, _, _, _, _ := trans.Transpile(code)
 
 	b.Run("GOJA_cold_start", func(b *testing.B) {
 		b.ResetTimer()

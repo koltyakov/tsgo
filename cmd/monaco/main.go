@@ -52,14 +52,26 @@ func (p *executorPool) init() {
 		p.auto = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineAuto),
 			tsgo.WithTimeout(executorTimeout),
+			tsgo.WithSecurity(tsgo.SecurityPolicy{
+				NetworkAccess:  true,
+				AllowedGlobals: []string{"fetch", "process", "eval"},
+			}),
 		)
 		p.goja = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineGOJA),
 			tsgo.WithTimeout(executorTimeout),
+			tsgo.WithSecurity(tsgo.SecurityPolicy{
+				NetworkAccess:  true,
+				AllowedGlobals: []string{"fetch", "process", "eval"},
+			}),
 		)
 		p.bun = tsgo.New(
 			tsgo.WithEngine(tsgo.EngineBun),
 			tsgo.WithTimeout(executorTimeout),
+			tsgo.WithSecurity(tsgo.SecurityPolicy{
+				NetworkAccess:  true,
+				AllowedGlobals: []string{"fetch", "process", "eval"},
+			}),
 		)
 		go p.warmup()
 	})

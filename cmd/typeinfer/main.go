@@ -176,7 +176,9 @@ func main() {
 	}
 
 	bunInferrer := typeinfer.NewInferrer()
-	defer bunInferrer.Close()
+	defer func() {
+		_ = bunInferrer.Close()
+	}()
 	goAnalyzer := contract.NewAnalyzer()
 	ctx := context.Background()
 

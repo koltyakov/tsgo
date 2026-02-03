@@ -392,7 +392,7 @@ func runBenchmarks(runs, warmup int, hasBun bool) []BenchResult {
 
 		fmt.Fprintf(os.Stderr, "Benchmarking: %s...\n", tc.id)
 
-		transpiled, _, err := trans.Transpile(tc.code)
+		transpiled, _, _, _, err := trans.Transpile(tc.code)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "  Transpile error: %v\n", err)
 			continue
@@ -484,7 +484,7 @@ func runConcurrencyBenchmarks(runs, warmup int, hasBun bool) []ConcurrencyResult
 		export default sum;
 	`
 
-	transpiled, _, _ := trans.Transpile(code)
+	transpiled, _, _, _, _ := trans.Transpile(code)
 
 	gojaEngine := goja.New(goja.Config{PoolSize: 32})
 	defer func() { _ = gojaEngine.Close() }()
