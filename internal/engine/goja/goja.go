@@ -220,17 +220,11 @@ func wrapCodeForExport(code string) string {
 // Runtime Pool
 // ============================================================================
 
-// Pool timing constants.
-const (
-	poolAcquireRetryInterval = 50 * time.Millisecond
-)
-
 // pool manages pre-warmed GOJA runtimes.
 type pool struct {
-	runtimes []*pooledRuntime
-	mu       sync.Mutex
-	cond     *sync.Cond
-	closed   atomic.Bool
+	runtimes  []*pooledRuntime
+	available chan *pooledRuntime
+	closed    atomic.Bool
 }
 
 // pooledRuntime wraps a GOJA runtime with tracking for context isolation.
@@ -259,9 +253,9 @@ func (pr *pooledRuntime) setGlobals(globals map[string]any) error {
 
 func newPool(size int) *pool {
 	p := &pool{
-		runtimes: make([]*pooledRuntime, size),
+		runtimes:  make([]*pooledRuntime, size),
+		available: make(chan *pooledRuntime, size),
 	}
-	p.cond = sync.NewCond(&p.mu)
 
 	for i := range size {
 		rt := createRuntime()
@@ -272,6 +266,7 @@ func newPool(size int) *pool {
 			baseGlobals: baseGlobals,
 			userGlobals: make([]string, 0, 16), // pre-allocate for typical usage
 		}
+		p.available <- p.runtimes[i]
 	}
 
 	return p
@@ -282,53 +277,18 @@ func (p *pool) acquire(ctx context.Context) (*pooledRuntime, func(), error) {
 		return nil, nil, ErrPoolClosed
 	}
 
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
-	// Set up a timer for periodic wake-ups
-	timer := time.NewTimer(poolAcquireRetryInterval)
-	defer timer.Stop()
-
-	ctxDone := ctx.Done()
-
-	for {
-		if err := ctx.Err(); err != nil {
-			return nil, nil, err
-		}
-		if p.closed.Load() {
+	select {
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
+	case r, ok := <-p.available:
+		if !ok || p.closed.Load() {
 			return nil, nil, ErrPoolClosed
 		}
-
-		// Try to find a free runtime
-		for _, r := range p.runtimes {
-			if r.busy.CompareAndSwap(false, true) {
-				return r, p.makeReleaseFunc(r), nil
-			}
+		if r.busy.CompareAndSwap(false, true) {
+			return r, p.makeReleaseFunc(r), nil
 		}
-
-		// All runtimes busy - wait with timeout
-		done := make(chan struct{})
-		go func() {
-			select {
-			case <-ctxDone:
-				p.cond.Broadcast()
-			case <-timer.C:
-				p.cond.Signal()
-			case <-done:
-			}
-		}()
-
-		p.cond.Wait()
-		close(done)
-
-		// Reset timer
-		if !timer.Stop() {
-			select {
-			case <-timer.C:
-			default:
-			}
-		}
-		timer.Reset(poolAcquireRetryInterval)
+		// In case of unexpected busy state, retry once
+		return p.acquire(ctx)
 	}
 }
 
@@ -337,7 +297,13 @@ func (p *pool) makeReleaseFunc(r *pooledRuntime) func() {
 	return func() {
 		clearRuntime(r)
 		r.busy.Store(false)
-		p.cond.Signal()
+		if p.closed.Load() {
+			return
+		}
+		select {
+		case p.available <- r:
+		default:
+		}
 	}
 }
 
@@ -345,7 +311,7 @@ func (p *pool) close() {
 	if !p.closed.CompareAndSwap(false, true) {
 		return
 	}
-	p.cond.Broadcast()
+	close(p.available)
 }
 
 // ============================================================================

@@ -72,6 +72,10 @@ type SecurityPolicy struct {
 	AllowedGlobals []string `json:"allowedGlobals,omitempty"`
 	// MaxExecutionTime limits script execution time.
 	MaxExecutionTime time.Duration `json:"maxExecutionTime,omitempty"`
+
+	// NOTE: DiskAccess, AllowedPaths, and MaxExecutionTime are currently
+	// not enforced by the runtime. NetworkAccess is enforced in Bun workers,
+	// and RestrictedGlobals/AllowedGlobals are enforced by static validation.
 }
 
 // Default security policy values.
@@ -144,6 +148,7 @@ type ExecutorConfig struct {
 	// Timeout sets the execution timeout.
 	Timeout Duration
 	// MemoryLimit sets the memory limit in bytes.
+	// NOTE: MemoryLimit is currently not enforced by the runtime.
 	MemoryLimit int64
 	// Globals are variables injected into the global scope.
 	Globals map[string]any

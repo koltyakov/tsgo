@@ -15,21 +15,21 @@ _Statistical results from 1000 runs per test case (after warmup)._
 ```
 Test Case                 | GOJA            | Bun             | Winner
 --------------------------------------------------------------------------------
-array_operations          | ~119µs          | ~106µs          | Bun (1.1x)
-class_instantiation       | ~234µs          | ~170µs          | Bun (1.4x)
-closure_heavy             | ~222µs          | ~113µs          | Bun (2.0x)
-generics                  | ~85µs           | ~87µs           | Tie
-iterative_fibonacci       | ~134µs          | ~82µs           | Bun (1.6x)
-json_processing           | ~326µs          | ~132µs          | Bun (2.5x)
-nested_loops              | ~838µs          | ~344µs          | Bun (2.4x)
-object_manipulation       | ~98µs           | ~102µs          | Tie
-recursive_fibonacci       | 1.42ms          | ~219µs          | Bun (6.5x)
-regex_operations          | ~93µs           | ~84µs           | Bun (1.1x)
-simple_arithmetic         | ~74µs           | ~84µs           | GOJA (1.1x)
-spread_destructure        | ~89µs           | ~80µs           | Bun (1.1x)
-string_operations         | ~83µs           | ~77µs           | Tie
-type_guards               | ~84µs           | ~92µs           | Tie
-with_globals              | ~78µs           | ~91µs           | GOJA (1.2x)
+array_operations          | ~106µs          | ~85µs           | Bun (1.3x)
+class_instantiation       | ~227µs          | ~174µs          | Bun (1.3x)
+closure_heavy             | ~251µs          | ~146µs          | Bun (1.7x)
+generics                  | ~93µs           | ~97µs           | Tie
+iterative_fibonacci       | ~135µs          | ~82µs           | Bun (1.6x)
+json_processing           | ~306µs          | ~116µs          | Bun (2.6x)
+nested_loops              | ~882µs          | ~346µs          | Bun (2.5x)
+object_manipulation       | ~92µs           | ~87µs           | Tie
+recursive_fibonacci       | 1.43ms          | ~183µs          | Bun (7.8x)
+regex_operations          | ~84µs           | ~82µs           | Tie
+simple_arithmetic         | ~69µs           | ~70µs           | Tie
+spread_destructure        | ~96µs           | ~84µs           | Bun (1.1x)
+string_operations         | ~76µs           | ~67µs           | Bun (1.1x)
+type_guards               | ~92µs           | ~109µs          | GOJA (1.2x)
+with_globals              | ~85µs           | ~95µs           | GOJA (1.1x)
 ```
 
 ## Concurrency Scaling
@@ -37,11 +37,11 @@ with_globals              | ~78µs           | ~91µs           | GOJA (1.2x)
 ```
 Concurrency  | GOJA            | Bun            
 --------------------------------------------------
-1            | ~121µs          | ~148µs         
-4            | ~231µs          | ~176µs         
-8            | ~351µs          | ~305µs         
-16           | ~625µs          | ~411µs         
-32           | 1.05ms          | ~667µs         
+1            | ~125µs          | ~177µs         
+4            | ~225µs          | ~170µs         
+8            | ~338µs          | ~328µs         
+16           | ~629µs          | ~445µs         
+32           | 1.06ms          | ~662µs         
 ```
 
 ## Memory Usage
@@ -51,21 +51,21 @@ _Memory allocated per execution (Go-side allocations, single run after warmup)._
 ```
 Test Case                 | GOJA            | Bun             | Winner
 --------------------------------------------------------------------------------
-array_operations          | 111.2 KB        | 3.6 KB          | Bun (31.0x)
-class_instantiation       | 189.8 KB        | 3.9 KB          | Bun (48.3x)
-closure_heavy             | 249.7 KB        | 6.1 KB          | Bun (41.2x)
-generics                  | 101.5 KB        | 7.0 KB          | Bun (14.4x)
-iterative_fibonacci       | 181.3 KB        | 4.9 KB          | Bun (37.0x)
-json_processing           | 337.5 KB        | 7.5 KB          | Bun (45.2x)
-nested_loops              | 231.1 KB        | 5.1 KB          | Bun (44.9x)
-object_manipulation       | 109.5 KB        | 6.1 KB          | Bun (17.9x)
-recursive_fibonacci       | 85.4 KB         | 4.2 KB          | Bun (20.4x)
-regex_operations          | 102.9 KB        | 6.3 KB          | Bun (16.2x)
-simple_arithmetic         | 79.3 KB         | 3.7 KB          | Bun (21.5x)
-spread_destructure        | 109.4 KB        | 6.7 KB          | Bun (16.3x)
-string_operations         | 85.9 KB         | 4.0 KB          | Bun (21.4x)
-type_guards               | 100.9 KB        | 6.4 KB          | Bun (15.8x)
-with_globals              | 92.1 KB         | 6.7 KB          | Bun (13.8x)
+array_operations          | 112.9 KB        | 3.6 KB          | Bun (31.5x)
+class_instantiation       | 193.4 KB        | 6.4 KB          | Bun (30.4x)
+closure_heavy             | 249.9 KB        | 6.1 KB          | Bun (41.1x)
+generics                  | 101.0 KB        | 4.9 KB          | Bun (20.6x)
+iterative_fibonacci       | 180.8 KB        | 3.6 KB          | Bun (50.9x)
+json_processing           | 337.4 KB        | 4.2 KB          | Bun (80.0x)
+nested_loops              | 231.1 KB        | 3.6 KB          | Bun (63.9x)
+object_manipulation       | 109.2 KB        | 8.0 KB          | Bun (13.7x)
+recursive_fibonacci       | 89.6 KB         | 3.5 KB          | Bun (25.9x)
+regex_operations          | 139.8 KB        | 6.3 KB          | Bun (22.1x)
+simple_arithmetic         | 97.2 KB         | 3.3 KB          | Bun (29.3x)
+spread_destructure        | 109.5 KB        | 5.2 KB          | Bun (21.0x)
+string_operations         | 89.9 KB         | 5.7 KB          | Bun (15.7x)
+type_guards               | 100.9 KB        | 6.2 KB          | Bun (16.3x)
+with_globals              | 92.1 KB         | 6.5 KB          | Bun (14.2x)
 ```
 
 ## Detailed Statistics
@@ -73,34 +73,34 @@ with_globals              | 92.1 KB         | 6.7 KB          | Bun (13.8x)
 ```
 Test Case                 | Mean         | StdDev       | Min          | P50          | P95         
 ----------------------------------------------------------------------------------------------------
-GOJA_array_operations     | ~119µs       | ~78µs        | ~72µs        | ~92µs        | ~320µs      
-Bun_array_operations      | ~106µs       | ~64µs        | ~63µs        | ~95µs        | ~146µs      
-GOJA_class_instantiation  | ~234µs       | ~119µs       | ~157µs       | ~190µs       | ~516µs      
-Bun_class_instantiation   | ~170µs       | ~126µs       | ~91µs        | ~153µs       | ~226µs      
-GOJA_closure_heavy        | ~222µs       | ~124µs       | ~140µs       | ~164µs       | ~537µs      
-Bun_closure_heavy         | ~113µs       | ~172µs       | ~66µs        | ~92µs        | ~146µs      
-GOJA_generics             | ~85µs        | ~53µs        | ~55µs        | ~66µs        | ~207µs      
-Bun_generics              | ~87µs        | ~179µs       | ~45µs        | ~67µs        | ~110µs      
-GOJA_iterative_fibonacci  | ~134µs       | ~80µs        | ~80µs        | ~98µs        | ~331µs      
-Bun_iterative_fibonacci   | ~82µs        | ~135µs       | ~43µs        | ~61µs        | ~106µs      
-GOJA_json_processing      | ~326µs       | ~130µs       | ~220µs       | ~263µs       | ~627µs      
-Bun_json_processing       | ~132µs       | ~123µs       | ~76µs        | ~113µs       | ~178µs      
-GOJA_nested_loops         | ~838µs       | ~144µs       | ~708µs       | ~784µs       | 1.22ms      
-Bun_nested_loops          | ~344µs       | ~151µs       | ~233µs       | ~325µs       | ~434µs      
-GOJA_object_manipulation  | ~98µs        | ~62µs        | ~60µs        | ~75µs        | ~252µs      
-Bun_object_manipulation   | ~102µs       | ~87µs        | ~60µs        | ~87µs        | ~141µs      
-GOJA_recursive_fibonacci  | 1.42ms       | ~123µs       | 1.24ms       | 1.38ms       | 1.67ms      
-Bun_recursive_fibonacci   | ~219µs       | ~95µs        | ~152µs       | ~204µs       | ~279µs      
-GOJA_regex_operations     | ~93µs        | ~59µs        | ~55µs        | ~72µs        | ~241µs      
-Bun_regex_operations      | ~84µs        | ~107µs       | ~43µs        | ~67µs        | ~117µs      
-GOJA_simple_arithmetic    | ~74µs        | ~66µs        | ~41µs        | ~53µs        | ~193µs      
-Bun_simple_arithmetic     | ~84µs        | ~70µs        | ~39µs        | ~71µs        | ~145µs      
-GOJA_spread_destructure   | ~89µs        | ~54µs        | ~57µs        | ~69µs        | ~216µs      
-Bun_spread_destructure    | ~80µs        | ~169µs       | ~46µs        | ~62µs        | ~99µs       
-GOJA_string_operations    | ~83µs        | ~58µs        | ~48µs        | ~63µs        | ~211µs      
-Bun_string_operations     | ~77µs        | ~57µs        | ~41µs        | ~65µs        | ~120µs      
-GOJA_type_guards          | ~84µs        | ~54µs        | ~53µs        | ~64µs        | ~215µs      
-Bun_type_guards           | ~92µs        | ~180µs       | ~47µs        | ~70µs        | ~115µs      
-GOJA_with_globals         | ~78µs        | ~47µs        | ~50µs        | ~61µs        | ~196µs      
-Bun_with_globals          | ~91µs        | ~190µs       | ~48µs        | ~70µs        | ~110µs      
+GOJA_array_operations     | ~106µs       | ~67µs        | ~70µs        | ~83µs        | ~274µs      
+Bun_array_operations      | ~85µs        | ~64µs        | ~53µs        | ~72µs        | ~125µs      
+GOJA_class_instantiation  | ~227µs       | ~115µs       | ~161µs       | ~189µs       | ~535µs      
+Bun_class_instantiation   | ~174µs       | ~136µs       | ~100µs       | ~156µs       | ~222µs      
+GOJA_closure_heavy        | ~251µs       | ~194µs       | ~147µs       | ~186µs       | ~662µs      
+Bun_closure_heavy         | ~146µs       | ~171µs       | ~77µs        | ~124µs       | ~193µs      
+GOJA_generics             | ~93µs        | ~59µs        | ~55µs        | ~71µs        | ~244µs      
+Bun_generics              | ~97µs        | ~182µs       | ~52µs        | ~75µs        | ~124µs      
+GOJA_iterative_fibonacci  | ~135µs       | ~85µs        | ~81µs        | ~99µs        | ~325µs      
+Bun_iterative_fibonacci   | ~82µs        | ~111µs       | ~42µs        | ~62µs        | ~110µs      
+GOJA_json_processing      | ~306µs       | ~127µs       | ~214µs       | ~248µs       | ~626µs      
+Bun_json_processing       | ~116µs       | ~136µs       | ~68µs        | ~93µs        | ~145µs      
+GOJA_nested_loops         | ~882µs       | ~184µs       | ~721µs       | ~812µs       | 1.32ms      
+Bun_nested_loops          | ~346µs       | ~167µs       | ~237µs       | ~319µs       | ~446µs      
+GOJA_object_manipulation  | ~92µs        | ~53µs        | ~61µs        | ~72µs        | ~222µs      
+Bun_object_manipulation   | ~87µs        | ~74µs        | ~55µs        | ~73µs        | ~115µs      
+GOJA_recursive_fibonacci  | 1.43ms       | ~116µs       | 1.27ms       | 1.39ms       | 1.64ms      
+Bun_recursive_fibonacci   | ~183µs       | ~90µs        | ~142µs       | ~169µs       | ~227µs      
+GOJA_regex_operations     | ~84µs        | ~53µs        | ~54µs        | ~65µs        | ~210µs      
+Bun_regex_operations      | ~82µs        | ~136µs       | ~39µs        | ~59µs        | ~111µs      
+GOJA_simple_arithmetic    | ~69µs        | ~50µs        | ~42µs        | ~52µs        | ~190µs      
+Bun_simple_arithmetic     | ~70µs        | ~55µs        | ~30µs        | ~58µs        | ~126µs      
+GOJA_spread_destructure   | ~96µs        | ~61µs        | ~59µs        | ~73µs        | ~238µs      
+Bun_spread_destructure    | ~84µs        | ~159µs       | ~44µs        | ~66µs        | ~108µs      
+GOJA_string_operations    | ~76µs        | ~50µs        | ~49µs        | ~58µs        | ~196µs      
+Bun_string_operations     | ~67µs        | ~55µs        | ~38µs        | ~55µs        | ~97µs       
+GOJA_type_guards          | ~92µs        | ~62µs        | ~56µs        | ~70µs        | ~244µs      
+Bun_type_guards           | ~109µs       | ~185µs       | ~47µs        | ~87µs        | ~152µs      
+GOJA_with_globals         | ~85µs        | ~57µs        | ~53µs        | ~63µs        | ~226µs      
+Bun_with_globals          | ~95µs        | ~190µs       | ~50µs        | ~71µs        | ~124µs      
 ```

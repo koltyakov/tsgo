@@ -2,6 +2,8 @@
 
 TypeScript execution library for Go for user-defined business logic embedding.
 
+![TSGo Banner](./assets/banner.jpg)
+
 ## Use Case: User-Defined Business Logic
 
 tsgo enables **platforms** built in Go to safely execute **user-defined TypeScript** for customizable business logic - workflow conditions, automation handlers, data transformations, and more.
@@ -209,6 +211,10 @@ executor := tsgo.New(
 )
 defer executor.Close()  // Always close to release resources
 ```
+
+> Note: `MemoryLimit` is currently not enforced by the runtime. `SecurityPolicy`
+> enforcement is limited to RestrictedGlobals/AllowedGlobals checks and Bun
+> `NetworkAccess` (for `fetch`/`WebSocket`).
 
 ### Security Policy Allowlist
 
