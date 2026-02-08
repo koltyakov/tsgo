@@ -113,6 +113,31 @@ func TestClearCache(t *testing.T) {
 	}
 }
 
+func TestCacheStats(t *testing.T) {
+	tr := NewWithCacheSize(2)
+
+	size, capacity := tr.CacheStats()
+	if capacity != 2 {
+		t.Fatalf("expected cache capacity 2, got %d", capacity)
+	}
+	if size != 0 {
+		t.Fatalf("expected empty cache initially, got %d", size)
+	}
+
+	_, _, _, _, err := tr.Transpile("const x = 1;")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	size, capacity = tr.CacheStats()
+	if capacity != 2 {
+		t.Fatalf("expected cache capacity 2, got %d", capacity)
+	}
+	if size == 0 {
+		t.Fatal("expected cache to contain at least one entry")
+	}
+}
+
 func TestExtractInlineSourceMap(t *testing.T) {
 	code := `var x = 1;
 //# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozfQ==`

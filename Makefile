@@ -81,7 +81,7 @@ help:
 	@echo "  bench-all       - Run benchmarks with multiple iterations"
 	@echo "  bench-goja      - Run GOJA benchmarks only"
 	@echo "  bench-bun       - Run Bun benchmarks only"
-	@echo "  benchmark-stats - Run statistical benchmark (15 runs, markdown output)"
+	@echo "  benchmark-stats - Run statistical benchmark (100 runs, markdown output)"
 	@echo "  benchmark-stats-md - Run statistical benchmark and save to file"
 	@echo "  monaco          - Run Monaco editor example"
 	@echo "  functions       - Run function injection example"

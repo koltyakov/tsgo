@@ -182,6 +182,17 @@ func (t *Transpiler) ClearCache() {
 	t.mu.Unlock()
 }
 
+// CacheStats returns the current and maximum cache sizes.
+// This method is safe for concurrent use.
+func (t *Transpiler) CacheStats() (size, capacity int) {
+	t.mu.RLock()
+	cache := t.cache
+	capacity = t.cacheSize
+	t.mu.RUnlock()
+
+	return cache.len(), capacity
+}
+
 // ============================================================================
 // Internal Types
 // ============================================================================
@@ -539,4 +550,10 @@ func (c *lruCache) removeLast() {
 	}
 	delete(c.items, c.tail.key)
 	c.remove(c.tail)
+}
+
+func (c *lruCache) len() int {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return len(c.items)
 }

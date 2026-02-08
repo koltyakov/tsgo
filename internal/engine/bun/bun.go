@@ -426,9 +426,12 @@ func newPool(cfg poolConfig, bunPath, workerPath string) *pool {
 		maxProcessAge:      cfg.maxProcessAge,
 	}
 
-	if cfg.queueSize > 0 {
-		p.queueSem = make(chan struct{}, cfg.queueSize)
+	queueSize := cfg.queueSize
+	if queueSize <= 0 {
+		// Default to pool size for bounded concurrency and backpressure.
+		queueSize = cfg.size
 	}
+	p.queueSem = make(chan struct{}, queueSize)
 
 	// Determine initial size (lazy mode starts minSize, eager starts all)
 	initialSize := cfg.size
@@ -554,14 +557,12 @@ func (p *pool) acquire(ctx context.Context) (*process, func(), error) {
 		return nil, nil, errors.New("pool is closed")
 	}
 
-	// If queue is configured, try to acquire a slot (backpressure)
-	if p.queueSem != nil {
-		select {
-		case p.queueSem <- struct{}{}:
-			// Got a slot
-		case <-ctx.Done():
-			return nil, nil, ctx.Err()
-		}
+	// Acquire a slot (backpressure).
+	select {
+	case p.queueSem <- struct{}{}:
+		// Got a slot.
+	case <-ctx.Done():
+		return nil, nil, ctx.Err()
 	}
 
 	p.mu.RLock()
@@ -682,11 +683,9 @@ func (p *pool) replaceProcessAsync(oldProc *process, idx int, restartAlways bool
 
 // releaseQueueSlot releases a slot in the queue semaphore.
 func (p *pool) releaseQueueSlot() {
-	if p.queueSem != nil {
-		select {
-		case <-p.queueSem:
-		default:
-		}
+	select {
+	case <-p.queueSem:
+	default:
 	}
 }
 
@@ -873,6 +872,8 @@ func (proc *process) sendRequest(ctx context.Context, req *request) (*response, 
 	case resp := <-respCh:
 		return resp, nil
 	case <-ctx.Done():
+		// Force recycling this process on next acquire; timed-out scripts can keep running.
+		atomic.AddInt32(&proc.failures, 100)
 		return nil, ctx.Err()
 	}
 }

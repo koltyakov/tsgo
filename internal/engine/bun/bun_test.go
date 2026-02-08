@@ -73,6 +73,31 @@ func TestBunEngine(t *testing.T) {
 		}
 	})
 
+	t.Run("with non-identifier global keys", func(t *testing.T) {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		result, err := engine.Execute(ctx, `export default globalThis["foo-bar"]`, map[string]any{
+			"foo-bar": 42,
+		})
+		if err != nil {
+			t.Fatalf("execution failed: %v", err)
+		}
+
+		switch v := result.Value.(type) {
+		case float64:
+			if v != 42 {
+				t.Errorf("expected 42, got %v", v)
+			}
+		case int:
+			if v != 42 {
+				t.Errorf("expected 42, got %v", v)
+			}
+		default:
+			t.Errorf("expected number, got %T: %v", v, v)
+		}
+	})
+
 	t.Run("async execution", func(t *testing.T) {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
@@ -307,6 +332,56 @@ func TestContextIsolation(t *testing.T) {
 			t.Errorf("sequential isolation failed: %v", result.Value)
 		}
 	})
+}
+
+func TestBunEngine_RecoversAfterTimeout(t *testing.T) {
+	if _, err := exec.LookPath("bun"); err != nil {
+		t.Skip("Bun is not installed")
+	}
+
+	engine, err := New(Config{PoolSize: 1})
+	if err != nil {
+		t.Fatalf("failed to create engine: %v", err)
+	}
+	defer func() { _ = engine.Close() }()
+
+	if !engine.IsAvailable() {
+		t.Skip("Bun engine is not available")
+	}
+
+	timeoutCtx, timeoutCancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer timeoutCancel()
+
+	_, err = engine.Execute(timeoutCtx, `
+		export default async function() {
+			await new Promise(resolve => setTimeout(resolve, 2000));
+			return 1;
+		}
+	`, nil)
+	if !errors.Is(err, context.DeadlineExceeded) && !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected timeout/cancel error, got %v", err)
+	}
+
+	recoveryCtx, recoveryCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer recoveryCancel()
+
+	result, err := engine.Execute(recoveryCtx, `export default 7`, nil)
+	if err != nil {
+		t.Fatalf("engine did not recover after timeout: %v", err)
+	}
+
+	switch v := result.Value.(type) {
+	case float64:
+		if v != 7 {
+			t.Errorf("expected 7, got %v", v)
+		}
+	case int:
+		if v != 7 {
+			t.Errorf("expected 7, got %v", v)
+		}
+	default:
+		t.Errorf("expected number, got %T: %v", v, v)
+	}
 }
 
 func TestContextIsolation_Concurrent(t *testing.T) {

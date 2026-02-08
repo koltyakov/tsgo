@@ -115,6 +115,29 @@ function cleanupGlobals(): void {
   }
 }
 
+function isValidIdentifier(name: string): boolean {
+  return /^[A-Za-z_$][A-Za-z0-9_$]*$/.test(name);
+}
+
+function buildContextSetup(context: Record<string, unknown>, declarationKeyword: 'var' | 'const'): string {
+  const keys = Object.keys(context);
+  if (keys.length === 0) {
+    return '';
+  }
+
+  const lines: string[] = [`const __context__ = ${JSON.stringify(context)};`];
+  for (const key of keys) {
+    const keyLiteral = JSON.stringify(key);
+    if (isValidIdentifier(key)) {
+      lines.push(`${declarationKeyword} ${key} = __context__[${keyLiteral}];`);
+    } else {
+      lines.push(`(globalThis as Record<string, unknown>)[${keyLiteral}] = __context__[${keyLiteral}];`);
+    }
+  }
+
+  return lines.join('\n');
+}
+
 // Execute user code and extract default export
 async function executeCode(code: string, context: Record<string, unknown>): Promise<unknown> {
   // Check if code is already transpiled
@@ -129,16 +152,10 @@ async function executeCode(code: string, context: Record<string, unknown>): Prom
     // Format: var __tsgo_exports__ = (() => { ... return exports; })();
     
     // Build context injection for the Function constructor
-    const contextKeys = Object.keys(context);
-    const contextDeclarations = contextKeys.length > 0
-      ? contextKeys.map(key => 
-          `var ${key} = __context__["${key}"];`
-        ).join('\n')
-      : '';
+    const contextSetup = buildContextSetup(context, 'var');
     
     const wrappedCode = `
-var __context__ = ${JSON.stringify(context)};
-${contextDeclarations}
+${contextSetup}
 ${code}
 return typeof __tsgo_exports__ !== 'undefined' ? __tsgo_exports__ : undefined;
 `;
@@ -172,16 +189,10 @@ return typeof __tsgo_exports__ !== 'undefined' ? __tsgo_exports__ : undefined;
   } else if (isESM) {
     // ESM format from esbuild - use dynamic import via Blob URL
     // ESM already handles exports properly
-    const contextKeys = Object.keys(context);
-    const contextDeclarations = contextKeys.length > 0
-      ? `const __context__ = ${JSON.stringify(context)};\n` +
-        contextKeys.map(key => 
-          `const ${key} = __context__["${key}"];`
-        ).join('\n')
-      : '';
+    const contextSetup = buildContextSetup(context, 'const');
 
     const wrappedCode = `
-${contextDeclarations}
+${contextSetup}
 
 ${code}
 `;
@@ -214,16 +225,10 @@ ${code}
   } else {
     // Raw TypeScript/JavaScript code - use dynamic import via Blob URL
     // Inject context via JSON serialization for full isolation
-    const contextKeys = Object.keys(context);
-    const contextDeclarations = contextKeys.length > 0
-      ? `const __context__ = ${JSON.stringify(context)};\n` +
-        contextKeys.map(key => 
-          `const ${key} = __context__["${key}"];`
-        ).join('\n')
-      : '';
+    const contextSetup = buildContextSetup(context, 'const');
 
     const wrappedCode = `
-${contextDeclarations}
+${contextSetup}
 
 ${code}
 `;

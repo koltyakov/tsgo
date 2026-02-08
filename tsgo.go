@@ -119,8 +119,9 @@ type Executor struct {
 	bunEng     *bun.Engine
 	selector   *selector.Selector
 
-	mu     sync.RWMutex // Protects engine initialization and closed state
-	closed bool
+	mu               sync.RWMutex // Protects executor lifecycle and engine initialization
+	closed           bool
+	activeExecutions sync.WaitGroup
 }
 
 // ============================================================================
@@ -256,9 +257,11 @@ func New(opts ...Option) *Executor {
 func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	overallStart := time.Now()
 
-	if err := e.validateExecutionState(code); err != nil {
+	if err := e.acquireExecutionSlot(code); err != nil {
 		return nil, err
 	}
+	defer e.activeExecutions.Done()
+
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -338,18 +341,19 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	return result, nil
 }
 
-// validateExecutionState checks if the executor is ready for execution.
-func (e *Executor) validateExecutionState(code string) error {
-	e.mu.RLock()
-	closed := e.closed
-	e.mu.RUnlock()
+// acquireExecutionSlot validates execution state and tracks active calls.
+func (e *Executor) acquireExecutionSlot(code string) error {
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
-	if closed {
+	if e.closed {
 		return ErrExecutorClosed
 	}
 	if len(code) == 0 {
 		return ErrEmptyCode
 	}
+
+	e.activeExecutions.Add(1)
 	return nil
 }
 
@@ -569,12 +573,18 @@ func (e *Executor) getOrCreateBun() (*bun.Engine, error) {
 // It is idempotent and safe to call multiple times.
 func (e *Executor) Close() error {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if e.closed {
+		e.mu.Unlock()
 		return nil // Already closed
 	}
 	e.closed = true
+	e.mu.Unlock()
+
+	// Wait for in-flight executions to complete before tearing down engines.
+	e.activeExecutions.Wait()
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	var errs []error
 
@@ -603,13 +613,17 @@ func (e *Executor) Close() error {
 //	stats := executor.Stats()
 //	fmt.Printf("Cache size: %d/%d\n", stats.TranspilerCacheSize, stats.TranspilerCacheCapacity)
 func (e *Executor) Stats() types.ExecutorStats {
+	cacheSize, cacheCapacity := e.transpiler.CacheStats()
+
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
 	return types.ExecutorStats{
-		EngineConfigured: e.config.Engine,
-		GOJAActive:       e.gojaEng != nil,
-		BunActive:        e.bunEng != nil,
+		EngineConfigured:        e.config.Engine,
+		GOJAActive:              e.gojaEng != nil,
+		BunActive:               e.bunEng != nil,
+		TranspilerCacheSize:     cacheSize,
+		TranspilerCacheCapacity: cacheCapacity,
 	}
 }
 
@@ -744,6 +758,8 @@ func AnalyzeContractWithContext(ctx context.Context, code string) (*Contract, er
 	// Try TypeScript Compiler API first (more accurate) if Bun is available
 	if typeinfer.IsBunAvailable() {
 		inferrer := typeinfer.NewInferrer()
+		defer func() { _ = inferrer.Close() }()
+
 		result, err := inferrer.InferDefaultExport(ctx, code)
 		if err == nil && result.Error == "" {
 			// Convert inference result to Contract

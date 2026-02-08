@@ -595,6 +595,12 @@ func TestExecutorStats(t *testing.T) {
 	if stats.BunActive {
 		t.Error("expected Bun to not be active")
 	}
+	if stats.TranspilerCacheCapacity <= 0 {
+		t.Errorf("expected transpiler cache capacity > 0, got %d", stats.TranspilerCacheCapacity)
+	}
+	if stats.TranspilerCacheSize != 0 {
+		t.Errorf("expected empty transpiler cache at start, got %d", stats.TranspilerCacheSize)
+	}
 
 	// Execute something to initialize the engine
 	ctx := context.Background()
@@ -604,6 +610,9 @@ func TestExecutorStats(t *testing.T) {
 	stats = executor.Stats()
 	if !stats.GOJAActive {
 		t.Error("expected GOJA to be active after execution")
+	}
+	if stats.TranspilerCacheSize <= 0 {
+		t.Errorf("expected transpiler cache to have entries after execution, got %d", stats.TranspilerCacheSize)
 	}
 }
 
@@ -631,5 +640,73 @@ func TestExecutorStatsWithAuto(t *testing.T) {
 	stats := executor.Stats()
 	if stats.EngineConfigured != EngineAuto {
 		t.Errorf("expected engine Auto, got %v", stats.EngineConfigured)
+	}
+}
+
+func TestClose_WithInFlightExecution(t *testing.T) {
+	started := make(chan struct{})
+	release := make(chan struct{})
+
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithTimeout(2*time.Second),
+		WithFunctions(map[string]FunctionDef{
+			"blocker": {
+				GoFunc: func() int {
+					close(started)
+					<-release
+					return 1
+				},
+			},
+		}),
+	)
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := executor.Execute(context.Background(), `export default blocker();`)
+		done <- err
+	}()
+
+	select {
+	case <-started:
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for execution to start")
+	}
+
+	closeDone := make(chan error, 1)
+	go func() {
+		closeDone <- executor.Close()
+	}()
+
+	select {
+	case err := <-closeDone:
+		t.Fatalf("close returned before in-flight execution completed: %v", err)
+	case <-time.After(100 * time.Millisecond):
+		// Expected: close should wait until execution finishes.
+	}
+
+	close(release)
+
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("execution failed while close was pending: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for in-flight execution")
+	}
+
+	select {
+	case err := <-closeDone:
+		if err != nil {
+			t.Fatalf("close failed: %v", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("timed out waiting for close")
+	}
+
+	_, err := executor.Execute(context.Background(), `export default 1;`)
+	if err != ErrExecutorClosed {
+		t.Fatalf("expected ErrExecutorClosed after close, got %v", err)
 	}
 }
