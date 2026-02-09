@@ -216,6 +216,24 @@ executor := tsgo.New(
 defer executor.Close()  // Always close to release resources
 ```
 
+### Constructor Validation
+
+`New(...)` validates config options immediately and panics if configuration is invalid
+(for example, negative timeout/pool size values).
+
+For non-panicking flows, use `NewWithError(...)`:
+
+```go
+executor, err := tsgo.NewWithError(
+  tsgo.WithEngine(tsgo.EngineGOJA),
+  tsgo.WithTimeout(10*time.Second),
+)
+if err != nil {
+  return err // invalid configuration
+}
+defer executor.Close()
+```
+
 > **Note:** `SecurityPolicy` enforcement is limited to `RestrictedGlobals`/`AllowedGlobals` 
 > checks and Bun `NetworkAccess` (for `fetch`/`WebSocket`).
 

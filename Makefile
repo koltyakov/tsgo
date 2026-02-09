@@ -3,6 +3,12 @@
 # Default target
 all: build
 
+# Lint cache configuration (helps in restricted/sandboxed environments)
+LINT_HOME ?= /tmp
+LINT_GOCACHE ?= /tmp/go-build
+LINT_GOLANGCI_CACHE ?= /tmp/golangci-lint-cache
+LINT_GOMODCACHE ?= $(shell go env GOMODCACHE)
+
 # Build the library
 build:
 	go build ./...
@@ -42,6 +48,10 @@ fmt:
 
 # Run linter (requires golangci-lint)
 lint:
+	HOME=$(LINT_HOME) \
+	GOCACHE=$(LINT_GOCACHE) \
+	GOLANGCI_LINT_CACHE=$(LINT_GOLANGCI_CACHE) \
+	GOMODCACHE=$(LINT_GOMODCACHE) \
 	golangci-lint run ./...
 
 # Tidy dependencies
