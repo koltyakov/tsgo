@@ -6,19 +6,19 @@
 package typeinfer
 
 import (
-	"bufio"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/koltyakov/tsgo/internal/rpc"
 )
 
 // ============================================================================
@@ -199,10 +199,7 @@ type workerPool struct {
 
 type worker struct {
 	cmd       *exec.Cmd
-	stdin     io.WriteCloser
-	stdinMu   sync.Mutex
-	stdout    *bufio.Reader
-	pending   map[string]chan *rpcResponse
+	rpcClient *rpc.LineClient
 	mu        sync.Mutex
 	ready     bool
 	failures  int32
@@ -266,14 +263,11 @@ func (p *workerPool) startWorker() (*worker, error) {
 	}
 
 	w := &worker{
-		cmd:     cmd,
-		stdin:   stdin,
-		stdout:  bufio.NewReader(stdout),
-		pending: make(map[string]chan *rpcResponse),
+		cmd:       cmd,
+		rpcClient: rpc.NewLineClient(stdin, stdout),
 	}
 
-	// Start response reader
-	go w.readResponses()
+	go w.rpcClient.ReadResponses()
 
 	// Wait for ready signal
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -416,74 +410,17 @@ func (w *worker) infer(ctx context.Context, code string) (*InferenceResult, erro
 }
 
 func (w *worker) sendRequest(ctx context.Context, req *rpcRequest) (*rpcResponse, error) {
-	// Create response channel
-	respCh := make(chan *rpcResponse, 1)
-
-	w.mu.Lock()
-	w.pending[req.ID] = respCh
-	w.mu.Unlock()
-
-	defer func() {
-		w.mu.Lock()
-		delete(w.pending, req.ID)
-		w.mu.Unlock()
-	}()
-
-	// Send request
-	data, err := json.Marshal(req)
-	if err != nil {
-		return nil, err
-	}
-
-	w.stdinMu.Lock()
-	_, err = w.stdin.Write(append(data, '\n'))
-	w.stdinMu.Unlock()
-
+	data, err := w.rpcClient.SendRequest(ctx, req.ID, req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to send request: %w", err)
 	}
 
-	// Wait for response
-	select {
-	case resp := <-respCh:
-		return resp, nil
-	case <-ctx.Done():
-		return nil, ctx.Err()
+	var resp rpcResponse
+	if err := json.Unmarshal(data, &resp); err != nil {
+		return nil, err
 	}
-}
 
-func (w *worker) readResponses() {
-	for {
-		line, err := w.stdout.ReadBytes('\n')
-		if err != nil {
-			// Worker died
-			w.mu.Lock()
-			w.ready = false
-			// Signal all pending requests
-			for id, ch := range w.pending {
-				ch <- &rpcResponse{
-					ID: id,
-					Error: &struct {
-						Message string `json:"message"`
-						Stack   string `json:"stack,omitempty"`
-					}{Message: "worker died"},
-				}
-			}
-			w.mu.Unlock()
-			return
-		}
-
-		var resp rpcResponse
-		if err := json.Unmarshal(line, &resp); err != nil {
-			continue
-		}
-
-		w.mu.Lock()
-		if ch, ok := w.pending[resp.ID]; ok {
-			ch <- &resp
-		}
-		w.mu.Unlock()
-	}
+	return &resp, nil
 }
 
 func (w *worker) close() {
@@ -491,8 +428,8 @@ func (w *worker) close() {
 	w.ready = false
 	w.mu.Unlock()
 
-	if w.stdin != nil {
-		_ = w.stdin.Close()
+	if w.rpcClient != nil {
+		_ = w.rpcClient.CloseInput()
 	}
 
 	if w.cmd != nil && w.cmd.Process != nil {

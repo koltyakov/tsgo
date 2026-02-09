@@ -6,13 +6,11 @@
 package bun
 
 import (
-	"bufio"
 	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -23,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/koltyakov/tsgo/internal/rpc"
 	"github.com/koltyakov/tsgo/internal/types"
 )
 
@@ -375,10 +374,7 @@ type poolConfig struct {
 // process represents a single Bun worker process.
 type process struct {
 	cmd          *exec.Cmd
-	stdin        io.WriteCloser
-	stdinMu      sync.Mutex
-	stdout       *bufio.Reader
-	pending      map[string]chan *response
+	rpcClient    *rpc.LineClient
 	mu           sync.Mutex
 	ready        bool
 	lastUsed     time.Time
@@ -509,14 +505,12 @@ func (p *pool) startProcess() (*process, error) {
 
 	proc := &process{
 		cmd:       cmd,
-		stdin:     stdin,
-		stdout:    bufio.NewReader(stdout),
-		pending:   make(map[string]chan *response),
+		rpcClient: rpc.NewLineClient(stdin, stdout),
 		lastUsed:  time.Now(),
 		startTime: time.Now(),
 	}
 
-	go proc.readResponses()
+	go proc.rpcClient.ReadResponses()
 
 	// Wait for ready signal
 	if err := proc.waitForReady(); err != nil {
@@ -840,70 +834,22 @@ func (proc *process) execute(ctx context.Context, code string, context map[strin
 // It handles request/response correlation via unique IDs and supports
 // context cancellation for timeout handling.
 func (proc *process) sendRequest(ctx context.Context, req *request) (*response, error) {
-	respCh := make(chan *response, 1)
-
-	proc.mu.Lock()
-	proc.pending[req.ID] = respCh
-	proc.mu.Unlock()
-
-	defer func() {
-		proc.mu.Lock()
-		delete(proc.pending, req.ID)
-		proc.mu.Unlock()
-	}()
-
-	// Send request - protect stdin writes
-	data, err := json.Marshal(req)
+	data, err := proc.rpcClient.SendRequest(ctx, req.ID, req)
 	if err != nil {
-		return nil, err
-	}
-
-	proc.stdinMu.Lock()
-	_, err = proc.stdin.Write(append(data, '\n'))
-	proc.stdinMu.Unlock()
-
-	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			// Force recycling this process on next acquire; timed-out scripts can keep running.
+			atomic.AddInt32(&proc.failures, 100)
+		}
 		atomic.AddInt32(&proc.failures, 1)
 		return nil, err
 	}
 
-	// Wait for response
-	select {
-	case resp := <-respCh:
-		return resp, nil
-	case <-ctx.Done():
-		// Force recycling this process on next acquire; timed-out scripts can keep running.
-		atomic.AddInt32(&proc.failures, 100)
-		return nil, ctx.Err()
+	var resp response
+	if err := json.Unmarshal(data, &resp); err != nil {
+		atomic.AddInt32(&proc.failures, 1)
+		return nil, err
 	}
-}
-
-// readResponses runs a continuous loop reading JSON responses from the Bun process.
-// It dispatches responses to waiting callers via the pending channel map.
-// This goroutine exits when the process stdout is closed.
-func (proc *process) readResponses() {
-	for {
-		line, err := proc.stdout.ReadBytes('\n')
-		if err != nil {
-			// Process died
-			atomic.AddInt32(&proc.failures, 1)
-			return
-		}
-
-		var resp response
-		if err := json.Unmarshal(line, &resp); err != nil {
-			continue
-		}
-
-		proc.mu.Lock()
-		if ch, ok := proc.pending[resp.ID]; ok {
-			select {
-			case ch <- &resp:
-			default:
-			}
-		}
-		proc.mu.Unlock()
-	}
+	return &resp, nil
 }
 
 // ============================================================================
@@ -914,15 +860,12 @@ func (proc *process) readResponses() {
 // It sends a shutdown request to allow clean termination, then
 // waits briefly before forcefully killing if necessary.
 func (proc *process) close() {
-	proc.mu.Lock()
-	defer proc.mu.Unlock()
-
-	if proc.stdin != nil {
+	if proc.rpcClient != nil {
 		// Send shutdown request
 		req := &request{ID: "shutdown", Method: "shutdown"}
 		data, _ := json.Marshal(req)
-		_, _ = proc.stdin.Write(append(data, '\n'))
-		_ = proc.stdin.Close()
+		_ = proc.rpcClient.WriteRaw(append(data, '\n'))
+		_ = proc.rpcClient.CloseInput()
 	}
 
 	if proc.cmd != nil && proc.cmd.Process != nil {

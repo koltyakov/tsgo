@@ -159,7 +159,7 @@ func WithMemoryLimit(bytes int64) Option {
 // WithGlobals sets the global variables available to scripts.
 func WithGlobals(globals map[string]any) Option {
 	return func(c *types.ExecutorConfig) {
-		c.Globals = globals
+		c.Globals = maps.Clone(globals)
 	}
 }
 
@@ -168,7 +168,7 @@ func WithGlobals(globals map[string]any) Option {
 // TypeScript code (for Bun engine).
 func WithFunctions(functions map[string]types.FunctionDef) Option {
 	return func(c *types.ExecutorConfig) {
-		c.Functions = functions
+		c.Functions = maps.Clone(functions)
 	}
 }
 
@@ -232,10 +232,25 @@ func WithBackgroundWarmup(enabled bool) Option {
 // ============================================================================
 
 // New creates a new TypeScript executor with the given options.
+// It panics if options produce an invalid configuration.
 func New(opts ...Option) *Executor {
+	executor, err := NewWithError(opts...)
+	if err != nil {
+		panic(err)
+	}
+	return executor
+}
+
+// NewWithError creates a new TypeScript executor with the given options.
+// It returns an error if configuration validation fails.
+func NewWithError(opts ...Option) (*Executor, error) {
 	config := types.DefaultConfig()
 	for _, opt := range opts {
 		opt(&config)
+	}
+	cloneConfigMaps(&config)
+	if err := config.Validate(); err != nil {
+		return nil, err
 	}
 	if config.Security.RestrictedGlobals == nil {
 		config.Security.RestrictedGlobals = sandbox.RestrictedGlobals()
@@ -245,7 +260,12 @@ func New(opts ...Option) *Executor {
 		config:     config,
 		transpiler: transpiler.New(),
 		selector:   selector.New(),
-	}
+	}, nil
+}
+
+func cloneConfigMaps(config *types.ExecutorConfig) {
+	config.Globals = maps.Clone(config.Globals)
+	config.Functions = maps.Clone(config.Functions)
 }
 
 // ============================================================================

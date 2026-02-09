@@ -1,7 +1,11 @@
 // Package goja provides a GOJA-based JavaScript execution engine.
 package goja
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/koltyakov/tsgo/internal/codeanalyzer"
+)
 
 // ============================================================================
 // Unsupported Feature Detection
@@ -26,73 +30,37 @@ var featureDescriptions = map[string]string{
 // Returns a list of unsupported features found in the code.
 func DetectUnsupportedFeatures(code string) []UnsupportedFeature {
 	var features []UnsupportedFeature
-	found := make(map[string]bool)
-	n := len(code)
+	analysis := codeanalyzer.Analyze(code)
 
-	for i := 0; i < n; i++ {
-		c := code[i]
-
-		switch c {
-		case 'a':
-			if i+6 <= n && !found["async"] {
-				sub := code[i : i+6]
-				if sub == "async " || sub == "await " {
-					found["async"] = true
-					features = append(features, UnsupportedFeature{
-						Name:        "async/await",
-						Description: featureDescriptions["async"],
-					})
-				}
-			}
-		case 'f':
-			if i+6 <= n && code[i:i+6] == "fetch(" && !found["fetch"] {
-				found["fetch"] = true
-				features = append(features, UnsupportedFeature{
-					Name:        "fetch",
-					Description: featureDescriptions["fetch"],
-				})
-			}
-		case 'W':
-			if i+9 <= n && code[i:i+9] == "WebSocket" && !found["websocket"] {
-				found["websocket"] = true
-				features = append(features, UnsupportedFeature{
-					Name:        "WebSocket",
-					Description: featureDescriptions["websocket"],
-				})
-			}
-		case 'r':
-			if i+8 <= n && code[i:i+8] == "readFile" && !found["fileio"] {
-				found["fileio"] = true
-				features = append(features, UnsupportedFeature{
-					Name:        "File I/O",
-					Description: featureDescriptions["fileio"],
-				})
-			}
-		case 'w':
-			if i+9 <= n && code[i:i+9] == "writeFile" && !found["fileio"] {
-				found["fileio"] = true
-				features = append(features, UnsupportedFeature{
-					Name:        "File I/O",
-					Description: featureDescriptions["fileio"],
-				})
-			}
-		case 's':
-			if !found["timers"] {
-				if i+11 <= n && code[i:i+11] == "setTimeout(" {
-					found["timers"] = true
-					features = append(features, UnsupportedFeature{
-						Name:        "Timers",
-						Description: featureDescriptions["timers"],
-					})
-				} else if i+12 <= n && code[i:i+12] == "setInterval(" {
-					found["timers"] = true
-					features = append(features, UnsupportedFeature{
-						Name:        "Timers",
-						Description: featureDescriptions["timers"],
-					})
-				}
-			}
-		}
+	if analysis.HasAsync || analysis.HasAwait {
+		features = append(features, UnsupportedFeature{
+			Name:        "async/await",
+			Description: featureDescriptions["async"],
+		})
+	}
+	if analysis.HasCall("fetch") {
+		features = append(features, UnsupportedFeature{
+			Name:        "fetch",
+			Description: featureDescriptions["fetch"],
+		})
+	}
+	if analysis.HasIdentifier("WebSocket") {
+		features = append(features, UnsupportedFeature{
+			Name:        "WebSocket",
+			Description: featureDescriptions["websocket"],
+		})
+	}
+	if analysis.HasCall("readFile") || analysis.HasCall("writeFile") {
+		features = append(features, UnsupportedFeature{
+			Name:        "File I/O",
+			Description: featureDescriptions["fileio"],
+		})
+	}
+	if analysis.HasCall("setTimeout") || analysis.HasCall("setInterval") {
+		features = append(features, UnsupportedFeature{
+			Name:        "Timers",
+			Description: featureDescriptions["timers"],
+		})
 	}
 
 	return features

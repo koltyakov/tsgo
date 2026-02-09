@@ -121,6 +121,20 @@ func TestDetectUnsupportedFeatures_NoDuplicates(t *testing.T) {
 	}
 }
 
+func TestDetectUnsupportedFeatures_IgnoresCommentsAndStrings(t *testing.T) {
+	code := `
+		// async await fetch('/x')
+		const text = "setTimeout(readFile('/tmp'))";
+		/* WebSocket writeFile */
+		export default 1;
+	`
+
+	features := DetectUnsupportedFeatures(code)
+	if len(features) != 0 {
+		t.Fatalf("expected no features, got %v", features)
+	}
+}
+
 func TestFormatUnsupportedFeaturesError(t *testing.T) {
 	features := []UnsupportedFeature{
 		{Name: "async/await", Description: "async functions require Bun"},

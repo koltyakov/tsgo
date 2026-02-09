@@ -46,6 +46,20 @@ func TestSelect_UntrustedCode(t *testing.T) {
 	}
 }
 
+func TestSelect_IgnoresCommentsAndStrings(t *testing.T) {
+	s := New()
+	code := `
+		// await fetch("/ignored");
+		const s = "WebSocket readFile writeFile";
+		export default 42;
+	`
+
+	engine := s.Select(code)
+	if engine != types.EngineGOJA {
+		t.Errorf("expected GOJA when only comments/strings contain async markers, got %v", engine)
+	}
+}
+
 func TestComplexity(t *testing.T) {
 	s := New()
 

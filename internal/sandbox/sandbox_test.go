@@ -24,6 +24,19 @@ func TestValidateCode_Restricted(t *testing.T) {
 	}
 }
 
+func TestValidateCode_IgnoresCommentsAndStrings(t *testing.T) {
+	code := `
+		// eval("1 + 1")
+		const text = "Function('return 1')";
+	`
+	restricted := []string{"eval", "Function"}
+
+	err := ValidateCode(code, restricted)
+	if err != nil {
+		t.Errorf("unexpected error: %v", err)
+	}
+}
+
 func TestValidatePath_Allowed(t *testing.T) {
 	// Create a temporary directory to test with real paths
 	tmpDir := t.TempDir()

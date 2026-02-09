@@ -10,55 +10,22 @@ package sandbox
 import (
 	"fmt"
 	"path/filepath"
-	"regexp"
 	"strings"
-	"sync"
+
+	"github.com/koltyakov/tsgo/internal/codeanalyzer"
 )
-
-// ============================================================================
-// Pattern Caching
-// ============================================================================
-
-// patternCache caches compiled regex patterns for restricted globals.
-var (
-	patternCache   = make(map[string]*regexp.Regexp)
-	patternCacheMu sync.RWMutex
-)
-
-// getPattern returns a cached compiled regex pattern for word boundary matching.
-func getPattern(word string) *regexp.Regexp {
-	patternCacheMu.RLock()
-	if pattern, ok := patternCache[word]; ok {
-		patternCacheMu.RUnlock()
-		return pattern
-	}
-	patternCacheMu.RUnlock()
-
-	// Compile and cache
-	patternCacheMu.Lock()
-	defer patternCacheMu.Unlock()
-
-	// Double-check after acquiring write lock
-	if pattern, ok := patternCache[word]; ok {
-		return pattern
-	}
-
-	pattern := regexp.MustCompile(`\b` + regexp.QuoteMeta(word) + `\b`)
-	patternCache[word] = pattern
-	return pattern
-}
 
 // ============================================================================
 // Code Validation
 // ============================================================================
 
 // ValidateCode checks if code contains restricted globals.
-// Uses word boundary matching to avoid false positives.
+// Uses tokenized identifier matching to avoid substring false positives.
 func ValidateCode(code string, restricted []string) error {
+	analysis := codeanalyzer.Analyze(code)
+
 	for _, global := range restricted {
-		// Use cached pre-compiled pattern
-		pattern := getPattern(global)
-		if pattern.MatchString(code) {
+		if analysis.HasIdentifier(global) {
 			return fmt.Errorf("code contains restricted global: %s", global)
 		}
 	}

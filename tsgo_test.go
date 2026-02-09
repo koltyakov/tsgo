@@ -38,6 +38,31 @@ func TestNewWithOptions(t *testing.T) {
 	}
 }
 
+func TestNewWithError_RejectsInvalidNegativeConfig(t *testing.T) {
+	executor, err := NewWithError(
+		WithEngine(EngineGOJA),
+		WithTimeout(-1*time.Second),
+		WithMemoryLimit(-1),
+		WithPoolSize(-5),
+	)
+	if err == nil {
+		if executor != nil {
+			_ = executor.Close()
+		}
+		t.Fatal("expected validation error for invalid config")
+	}
+}
+
+func TestNew_PanicsOnInvalidConfig(t *testing.T) {
+	defer func() {
+		if r := recover(); r == nil {
+			t.Fatal("expected panic for invalid config")
+		}
+	}()
+
+	_ = New(WithTimeout(-1 * time.Second))
+}
+
 func TestWithDebugLogger(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 		Level: slog.LevelDebug,
@@ -111,6 +136,35 @@ func TestWithFunctions(t *testing.T) {
 	}
 }
 
+func TestWithFunctions_IsImmutableAfterNew(t *testing.T) {
+	functions := map[string]FunctionDef{
+		"calc": {
+			TSCode: `function calc(): number { return 1; }`,
+		},
+	}
+
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithFunctions(functions),
+	)
+	defer func() { _ = executor.Close() }()
+
+	// Mutate original map after New(); executor config should be unaffected.
+	functions["calc"] = FunctionDef{
+		TSCode: `function calc(): number { return 99; }`,
+	}
+
+	result, err := executor.Execute(context.Background(), `export default calc();`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok := result.Value.(int64)
+	if !ok || got != 1 {
+		t.Fatalf("expected immutable function result 1, got %T(%v)", result.Value, result.Value)
+	}
+}
+
 func TestWithFunctions_Bun(t *testing.T) {
 	executor := New(
 		WithEngine(EngineBun),
@@ -171,6 +225,79 @@ func TestExecute_WithGlobals(t *testing.T) {
 		if v != 50 {
 			t.Errorf("expected 50, got %f", v)
 		}
+	}
+}
+
+func TestWithGlobals_IsImmutableAfterNew(t *testing.T) {
+	globals := map[string]any{"multiplier": 10}
+
+	executor := New(
+		WithEngine(EngineGOJA),
+		WithGlobals(globals),
+	)
+	defer func() { _ = executor.Close() }()
+
+	// Mutate original map after New(); executor config should be unaffected.
+	globals["multiplier"] = 99
+
+	result, err := executor.Execute(context.Background(), `export default 5 * multiplier`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok := result.Value.(int64)
+	if !ok || got != 50 {
+		t.Fatalf("expected immutable globals result 50, got %T(%v)", result.Value, result.Value)
+	}
+}
+
+func TestNew_ClonesGlobalsFromCustomOption(t *testing.T) {
+	globals := map[string]any{"multiplier": 10}
+	custom := func(c *Config) {
+		c.Globals = globals
+	}
+
+	executor := New(WithEngine(EngineGOJA), custom)
+	defer func() { _ = executor.Close() }()
+
+	globals["multiplier"] = 99
+
+	result, err := executor.Execute(context.Background(), `export default 5 * multiplier`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok := result.Value.(int64)
+	if !ok || got != 50 {
+		t.Fatalf("expected immutable globals result 50, got %T(%v)", result.Value, result.Value)
+	}
+}
+
+func TestNew_ClonesFunctionsFromCustomOption(t *testing.T) {
+	functions := map[string]FunctionDef{
+		"calc": {
+			TSCode: `function calc(): number { return 1; }`,
+		},
+	}
+	custom := func(c *Config) {
+		c.Functions = functions
+	}
+
+	executor := New(WithEngine(EngineGOJA), custom)
+	defer func() { _ = executor.Close() }()
+
+	functions["calc"] = FunctionDef{
+		TSCode: `function calc(): number { return 99; }`,
+	}
+
+	result, err := executor.Execute(context.Background(), `export default calc();`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	got, ok := result.Value.(int64)
+	if !ok || got != 1 {
+		t.Fatalf("expected immutable function result 1, got %T(%v)", result.Value, result.Value)
 	}
 }
 
