@@ -10,20 +10,20 @@ tsgo enables **platforms** built in Go to safely execute **user-defined TypeScri
 
 ```mermaid
 flowchart TB
-    subgraph Platform ["🔧 Go Platform"]
+    subgraph Platform ["Go Platform"]
         TypeDefs["Type Definitions"]
         Contracts["Contract Analyzer"]
         Runtime["Runtime Executor"]
         Engine["tsgo Engine"]
     end
 
-    subgraph Editor ["✏️ Monaco Editor"]
+    subgraph Editor ["Monaco Editor"]
         Monaco["TypeScript Editor"]
         ContractView["Contract Preview"]
         Mapper["Output Mapper"]
     end
 
-    subgraph Business ["📦 Business Context"]
+    subgraph Business ["Business Context"]
         Inputs(["Inputs"])
         Objects(["Business Objects"])
         Outputs(["Outputs"])
@@ -40,9 +40,9 @@ flowchart TB
     Runtime --> Engine
     Engine -->|"result"| Outputs
 
-    style Platform fill:#1e3a5f,stroke:#4a90d9,color:#fff
-    style Editor  fill:#1e3a2f,stroke:#4a9d6f,color:#fff
-    style Business fill:#3a2a1e,stroke:#c47a3a,color:#fff
+    style Platform fill:transparent,stroke:#4a90d9,stroke-width:2px,color:#4a90d9
+    style Editor   fill:transparent,stroke:#4a9d6f,stroke-width:2px,color:#4a9d6f
+    style Business fill:transparent,stroke:#c47a3a,stroke-width:2px,color:#c47a3a
 ```
 
 ### How It Works
@@ -164,16 +164,19 @@ func main() {
 
 ```mermaid
 flowchart TD
-    A{async/await?} -->|Yes| Bun
+    Start([TypeScript code]) --> A{async/await<br/>or fetch?}
+    A -->|Yes| Bun([Bun])
     A -->|No| B{CPU-intensive?}
     B -->|Yes| Bun
-    B -->|No| GOJA
+    B -->|No| GOJA([GOJA])
 
+    Start:::entry
     GOJA:::goja
     Bun:::bun
 
-    classDef goja fill:#1e3a5f,stroke:#4a90d9,color:#fff
-    classDef bun   fill:#1e3a2f,stroke:#4a9d6f,color:#fff
+    classDef entry fill:transparent,stroke:#888,stroke-width:2px,color:#888
+    classDef goja  fill:transparent,stroke:#4a90d9,stroke-width:2px,color:#4a90d9
+    classDef bun   fill:transparent,stroke:#4a9d6f,stroke-width:2px,color:#4a9d6f
 ```
 
 **GOJA** - Best for simple expressions, high concurrency, pure Go deployments  
