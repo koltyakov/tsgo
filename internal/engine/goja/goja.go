@@ -68,6 +68,26 @@ func New(cfg Config) *Engine {
 	}
 }
 
+// Validate checks pre-transpile source for features GOJA cannot run
+// (async/await, fetch, WebSocket, filesystem APIs, timers). Returns an
+// *types.ExecutionError describing the offending features, or nil.
+func (e *Engine) Validate(code string) error {
+	features := DetectUnsupportedFeatures(code)
+	if len(features) == 0 {
+		return nil
+	}
+	return &types.ExecutionError{
+		Message: FormatUnsupportedFeaturesError(features),
+		Code:    code,
+	}
+}
+
+// WantsESM always reports false: GOJA has no ESM loader and top-level
+// await would be rejected by Validate up-front anyway.
+func (e *Engine) WantsESM(code string) bool {
+	return false
+}
+
 // Execute runs JavaScript code in a GOJA runtime.
 func (e *Engine) Execute(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {
 	if err := ctx.Err(); err != nil {

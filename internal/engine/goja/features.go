@@ -93,32 +93,10 @@ func FormatUnsupportedFeaturesError(features []UnsupportedFeature) string {
 // Top-Level Await Detection
 // ============================================================================
 
-// ContainsTopLevelAwait checks if code has top-level await (await outside async function).
-// This is a simple heuristic check for common patterns.
+// ContainsTopLevelAwait checks if code has top-level await.
+//
+// Deprecated: use codeanalyzer.ContainsTopLevelAwait. This alias is retained
+// for internal callers and will be removed once they are migrated.
 func ContainsTopLevelAwait(code string) bool {
-	n := len(code)
-	for i := 0; i < n-6; i++ {
-		if code[i:i+6] != "await " {
-			continue
-		}
-
-		// Check for "export default await" pattern
-		if i >= 15 && code[i-15:i] == "export default " {
-			return true
-		}
-
-		// Check for assignment patterns like "const x = await"
-		if i >= 2 && code[i-2:i] == "= " {
-			// Verify not inside async function by checking nearby prefix
-			start := i - 100
-			if start < 0 {
-				start = 0
-			}
-			prefix := code[start:i]
-			if !strings.Contains(prefix, "async ") {
-				return true
-			}
-		}
-	}
-	return false
+	return codeanalyzer.ContainsTopLevelAwait(code)
 }

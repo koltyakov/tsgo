@@ -21,6 +21,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/koltyakov/tsgo/internal/codeanalyzer"
 	"github.com/koltyakov/tsgo/internal/rpc"
 	"github.com/koltyakov/tsgo/internal/types"
 )
@@ -193,6 +194,19 @@ func setupWorkerScript(customScript string) (workerPath string, tempDir string, 
 // ============================================================================
 // Execution
 // ============================================================================
+
+// Validate is a no-op for the Bun engine: Bun supports the full TypeScript
+// feature set tsgo exposes, so nothing needs rejecting up-front.
+func (e *Engine) Validate(code string) error {
+	return nil
+}
+
+// WantsESM reports true when the source uses top-level await, which the
+// IIFE wrapper emitted by the default transpile pass cannot support. ESM
+// output preserves the module's top-level-await semantics for Bun.
+func (e *Engine) WantsESM(code string) bool {
+	return codeanalyzer.ContainsTopLevelAwait(code)
+}
 
 // Execute runs TypeScript code in a Bun process.
 func (e *Engine) Execute(ctx context.Context, code string, globals map[string]any) (*types.Result, error) {

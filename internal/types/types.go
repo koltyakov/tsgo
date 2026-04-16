@@ -212,6 +212,10 @@ type Result struct {
 	Metrics ExecutionMetrics
 	// EngineUsed indicates which engine executed the script.
 	EngineUsed EngineType
+	// SourceMap is the base64-encoded source map emitted during transpilation,
+	// when source maps are enabled on the executor. Empty otherwise. Useful
+	// for integrating script tracebacks with external tooling.
+	SourceMap string
 }
 
 // ExecutionMetrics contains performance metrics for an execution.

@@ -51,7 +51,23 @@ type Contract struct {
 	Type *TypeDef `json:"type"`
 	// Description is an optional description of the contract.
 	Description string `json:"description,omitempty"`
+	// Source identifies which analyzer produced this contract. It is
+	// SourceTSCompiler when inferred via the TypeScript Compiler API (requires
+	// Bun) and SourceHeuristic when produced by the Go-based fallback
+	// analyzer. The latter is best-effort — callers should treat its output
+	// as approximate.
+	Source ContractSource `json:"source,omitempty"`
 }
+
+// ContractSource identifies the analyzer that produced a Contract.
+type ContractSource string
+
+const (
+	// SourceTSCompiler indicates the TypeScript Compiler API (via Bun) produced the contract.
+	SourceTSCompiler ContractSource = "ts-compiler"
+	// SourceHeuristic indicates the Go-based regex/tokenizer analyzer produced the contract.
+	SourceHeuristic ContractSource = "heuristic"
+)
 
 // TypeDef represents a TypeScript type definition.
 type TypeDef struct {
@@ -180,8 +196,9 @@ func (a *Analyzer) Analyze(code string) (*Contract, error) {
 	}
 
 	return &Contract{
-		Name: "Result",
-		Type: exportType,
+		Name:   "Result",
+		Type:   exportType,
+		Source: SourceHeuristic,
 	}, nil
 }
 

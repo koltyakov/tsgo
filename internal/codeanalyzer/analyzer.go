@@ -220,6 +220,37 @@ func isIdentifierPart(c byte) bool {
 	return isIdentifierStart(c) || ('0' <= c && c <= '9')
 }
 
+// ContainsTopLevelAwait reports whether code uses await outside of any
+// async function — a feature that requires ESM module output (e.g. Bun's
+// top-level-await) and is not supported by engines without ESM loaders.
+//
+// This is a pragmatic string-scan heuristic matching the patterns real users
+// write: `const x = await …` and `export default await …`. It does not
+// fully parse and will not catch pathological placements.
+func ContainsTopLevelAwait(code string) bool {
+	n := len(code)
+	for i := 0; i < n-6; i++ {
+		if code[i:i+6] != "await " {
+			continue
+		}
+
+		// Check for "export default await" pattern
+		if i >= 15 && code[i-15:i] == "export default " {
+			return true
+		}
+
+		// Check for assignment patterns like "const x = await"
+		if i >= 2 && code[i-2:i] == "= " {
+			// Verify not inside async function by checking nearby prefix
+			prefix := code[max(i-100, 0):i]
+			if !strings.Contains(prefix, "async ") {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 func nextSignificantChar(code string, idx int) (byte, bool) {
 	n := len(code)
 	for idx < n {

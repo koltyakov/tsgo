@@ -115,11 +115,21 @@ var (
 type Executor struct {
 	config     types.ExecutorConfig
 	transpiler *transpiler.Transpiler
-	gojaEng    *goja.Engine
-	bunEng     *bun.Engine
 	selector   *selector.Selector
 
-	mu               sync.RWMutex // Protects executor lifecycle and engine initialization
+	// Precomputed from config.Functions — immutable after New.
+	tsPrelude   string         // TSCode blocks concatenated with trailing newlines
+	goFunctions map[string]any // GoFunc-backed entries, ready for goja injection
+	gojaGlobals map[string]any // config.Globals ∪ goFunctions (for GOJA path)
+
+	gojaOnce sync.Once
+	gojaEng  *goja.Engine
+
+	bunOnce    sync.Once
+	bunEng     *bun.Engine
+	bunInitErr error
+
+	mu               sync.Mutex // Protects closed flag and Close() sequencing
 	closed           bool
 	activeExecutions sync.WaitGroup
 }
@@ -197,6 +207,8 @@ func WithPoolSize(size int) Option {
 // This enables detailed logging of engine selection, transpilation,
 // cache hits/misses, and execution phases for troubleshooting.
 //
+// Passing nil is a no-op; the executor's default discard logger is preserved.
+//
 // Example:
 //
 //	logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
@@ -205,6 +217,9 @@ func WithPoolSize(size int) Option {
 //	executor := tsgo.New(tsgo.WithDebugLogger(logger))
 func WithDebugLogger(logger *slog.Logger) Option {
 	return func(c *types.ExecutorConfig) {
+		if logger == nil {
+			return
+		}
 		c.Logger = logger
 	}
 }
@@ -255,12 +270,60 @@ func NewWithError(opts ...Option) (*Executor, error) {
 	if config.Security.RestrictedGlobals == nil {
 		config.Security.RestrictedGlobals = sandbox.RestrictedGlobals()
 	}
+	if config.Logger == nil {
+		config.Logger = slog.New(slog.DiscardHandler)
+	}
+
+	tsPrelude, goFunctions := precomputeFunctions(config.Functions)
+	gojaGlobals := mergeGlobals(config.Globals, goFunctions)
 
 	return &Executor{
-		config:     config,
-		transpiler: transpiler.New(),
-		selector:   selector.New(),
+		config:      config,
+		transpiler:  transpiler.New(),
+		selector:    selector.New(),
+		tsPrelude:   tsPrelude,
+		goFunctions: goFunctions,
+		gojaGlobals: gojaGlobals,
 	}, nil
+}
+
+// precomputeFunctions builds the TS prelude and Go function map once at
+// construction. Config.Functions is immutable after New, so there's no reason
+// to rebuild these on every Execute.
+func precomputeFunctions(functions map[string]types.FunctionDef) (prelude string, goFunctions map[string]any) {
+	if len(functions) == 0 {
+		return "", nil
+	}
+	var sb strings.Builder
+	goFunctions = make(map[string]any, len(functions))
+	for name, fn := range functions {
+		if fn.GoFunc != nil {
+			goFunctions[name] = fn.GoFunc
+		}
+		if fn.TSCode != "" {
+			sb.WriteString(fn.TSCode)
+			sb.WriteByte('\n')
+		}
+	}
+	if len(goFunctions) == 0 {
+		goFunctions = nil
+	}
+	return sb.String(), goFunctions
+}
+
+// mergeGlobals unions base globals with Go function bindings. Go functions
+// take precedence over any same-named global, mirroring prior behavior.
+func mergeGlobals(base, goFunctions map[string]any) map[string]any {
+	if len(goFunctions) == 0 {
+		if base == nil {
+			return nil
+		}
+		return maps.Clone(base)
+	}
+	merged := make(map[string]any, len(base)+len(goFunctions))
+	maps.Copy(merged, base)
+	maps.Copy(merged, goFunctions)
+	return merged
 }
 
 func cloneConfigMaps(config *types.ExecutorConfig) {
@@ -272,9 +335,32 @@ func cloneConfigMaps(config *types.ExecutorConfig) {
 // Execution
 // ============================================================================
 
+// ExecuteOptions are per-call overrides for a single Execute.
+// They layer on top of the Executor's base configuration without mutating it
+// and without invalidating the transpile/engine caches, which makes them
+// suitable for request-scoped values (e.g. a per-user userId).
+type ExecuteOptions struct {
+	// Globals are per-call globals that are merged on top of the executor's
+	// base Globals (and Go function bindings for GOJA). Keys in Globals
+	// override same-named keys in the base set for this call only.
+	Globals map[string]any
+
+	// Timeout overrides the executor's configured Timeout for this call.
+	// A zero value means "use the executor's configured timeout".
+	// Use a negative value to explicitly disable the timeout for one call.
+	Timeout time.Duration
+}
+
 // Execute runs TypeScript code and returns the result.
 // It is safe for concurrent use.
 func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
+	return e.ExecuteWith(ctx, code, ExecuteOptions{})
+}
+
+// ExecuteWith runs TypeScript code with per-call option overrides.
+// See ExecuteOptions for the set of overridable fields. It is safe for
+// concurrent use and shares the same engine/transpile caches as Execute.
+func (e *Executor) ExecuteWith(ctx context.Context, code string, opts ExecuteOptions) (*Result, error) {
 	overallStart := time.Now()
 
 	if err := e.acquireExecutionSlot(code); err != nil {
@@ -289,46 +375,43 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 		return nil, err
 	}
 
-	// Prepare code and functions
-	codeToTranspile, goFunctions := e.prepareFunctions(code)
+	// Prepend TS prelude (precomputed at New) to the user's code.
+	codeToTranspile := code
+	if e.tsPrelude != "" {
+		codeToTranspile = e.tsPrelude + code
+	}
 
 	// Select engine (needed for transpilation format decision)
 	engineType := e.selectEngine(codeToTranspile)
-	if e.config.Logger != nil {
-		e.config.Logger.Debug("engine selected", "engine", engineType.String())
-	}
+	e.config.Logger.Debug("engine selected", "engine", engineType.String())
 
-	// Check for unsupported features when GOJA is explicitly configured
-	if engineType == EngineGOJA {
-		if err := e.validateGOJAFeatures(codeToTranspile); err != nil {
-			return nil, err
-		}
-	}
-
-	// Transpile TypeScript to JavaScript
-	hasTopLevelAwait := goja.ContainsTopLevelAwait(codeToTranspile)
-	js, sourceMap, cacheHit, transpileTime, err := e.transpileCode(codeToTranspile, engineType, hasTopLevelAwait)
-	if err != nil {
-		return nil, e.wrapTranspileError(err, code)
-	}
-	if e.config.Logger != nil {
-		e.config.Logger.Debug("transpilation complete",
-			"cacheHit", cacheHit,
-			"transpileTime", transpileTime,
-			"hasTopLevelAwait", hasTopLevelAwait,
-		)
-	}
-
-	// Get or create engine
+	// Get or create engine, then let it reject unsupported source features
+	// before we spend any cycles transpiling.
 	eng, err := e.getEngine(engineType)
 	if err != nil {
 		return nil, err
 	}
+	if err := eng.Validate(codeToTranspile); err != nil {
+		return nil, err
+	}
+
+	// Transpile TypeScript to JavaScript. The engine dictates the module
+	// format it wants (IIFE vs ESM); the Executor just dispatches.
+	wantsESM := eng.WantsESM(codeToTranspile)
+	js, sourceMap, cacheHit, transpileTime, err := e.transpileCode(codeToTranspile, wantsESM)
+	if err != nil {
+		return nil, e.wrapTranspileError(err, code)
+	}
+	e.config.Logger.Debug("transpilation complete",
+		"cacheHit", cacheHit,
+		"transpileTime", transpileTime,
+		"esm", wantsESM,
+	)
 
 	// Prepare execution context and globals
-	execCtx, cancel := e.prepareContext(ctx)
+	execCtx, cancel := e.prepareContext(ctx, opts.Timeout)
 	defer cancel()
-	globals := e.prepareGlobals(goFunctions, engineType)
+	globals := e.globalsFor(engineType, opts.Globals)
 
 	// Final context check before execution
 	if err := execCtx.Err(); err != nil {
@@ -338,25 +421,24 @@ func (e *Executor) Execute(ctx context.Context, code string) (*Result, error) {
 	// Execute
 	result, err := eng.Execute(execCtx, js, globals)
 	if err != nil {
-		if e.config.Logger != nil {
-			e.config.Logger.Debug("execution failed", "error", err.Error())
-		}
+		e.config.Logger.Debug("execution failed", "error", err.Error())
 		return nil, e.mapExecutionError(err, sourceMap, code)
 	}
 
 	result.Metrics.TranspileTime = transpileTime
 	result.Metrics.CacheHit = cacheHit
 	result.Metrics.TotalTime = time.Since(overallStart)
-
-	if e.config.Logger != nil {
-		e.config.Logger.Debug("execution complete",
-			"engine", engineType.String(),
-			"totalTime", result.Metrics.TotalTime,
-			"executionTime", result.Metrics.ExecutionTime,
-			"transpileTime", result.Metrics.TranspileTime,
-			"cacheHit", result.Metrics.CacheHit,
-		)
+	if e.config.SourceMaps {
+		result.SourceMap = sourceMap
 	}
+
+	e.config.Logger.Debug("execution complete",
+		"engine", engineType.String(),
+		"totalTime", result.Metrics.TotalTime,
+		"executionTime", result.Metrics.ExecutionTime,
+		"transpileTime", result.Metrics.TranspileTime,
+		"cacheHit", result.Metrics.CacheHit,
+	)
 
 	return result, nil
 }
@@ -414,39 +496,6 @@ func filterRestrictedGlobals(restricted, allowed []string) []string {
 	return filtered
 }
 
-// validateGOJAFeatures checks for features unsupported by the GOJA engine.
-func (e *Executor) validateGOJAFeatures(code string) error {
-	unsupportedFeatures := goja.DetectUnsupportedFeatures(code)
-	if len(unsupportedFeatures) > 0 {
-		return &ExecutionError{
-			Message: goja.FormatUnsupportedFeaturesError(unsupportedFeatures),
-			Code:    code,
-		}
-	}
-	return nil
-}
-
-// prepareFunctions extracts TypeScript prelude and Go functions from config.
-func (e *Executor) prepareFunctions(code string) (codeWithPrelude string, goFunctions map[string]any) {
-	goFunctions = make(map[string]any)
-	var prelude strings.Builder
-
-	for name, fn := range e.config.Functions {
-		if fn.GoFunc != nil {
-			goFunctions[name] = fn.GoFunc
-		}
-		if fn.TSCode != "" {
-			prelude.WriteString(fn.TSCode)
-			prelude.WriteByte('\n')
-		}
-	}
-
-	if prelude.Len() > 0 {
-		return prelude.String() + code, goFunctions
-	}
-	return code, goFunctions
-}
-
 // selectEngine determines which engine to use for execution.
 func (e *Executor) selectEngine(code string) EngineType {
 	if e.config.Engine == EngineAuto {
@@ -455,10 +504,11 @@ func (e *Executor) selectEngine(code string) EngineType {
 	return e.config.Engine
 }
 
-// transpileCode converts TypeScript to JavaScript.
-func (e *Executor) transpileCode(code string, engineType EngineType, hasTopLevelAwait bool) (js, sourceMap string, cacheHit bool, transpileTime time.Duration, err error) {
-	// Use ESM format for Bun with top-level await (IIFE doesn't support it)
-	if engineType == EngineBun && hasTopLevelAwait {
+// transpileCode converts TypeScript to JavaScript. When wantsESM is true the
+// output is an ES module (needed for top-level await); otherwise the default
+// IIFE wrapper is used.
+func (e *Executor) transpileCode(code string, wantsESM bool) (js, sourceMap string, cacheHit bool, transpileTime time.Duration, err error) {
+	if wantsESM {
 		return e.transpiler.TranspileESM(code)
 	}
 	return e.transpiler.Transpile(code)
@@ -473,30 +523,38 @@ func (e *Executor) wrapTranspileError(err error, code string) error {
 }
 
 // prepareContext creates an execution context with timeout if configured.
-func (e *Executor) prepareContext(ctx context.Context) (context.Context, context.CancelFunc) {
-	if e.config.Timeout > 0 {
-		return context.WithTimeout(ctx, e.config.Timeout.Duration())
+// A non-zero override takes precedence; a negative override disables the
+// timeout for this call.
+func (e *Executor) prepareContext(ctx context.Context, override time.Duration) (context.Context, context.CancelFunc) {
+	timeout := e.config.Timeout.Duration()
+	if override != 0 {
+		timeout = override
+	}
+	if timeout > 0 {
+		return context.WithTimeout(ctx, timeout)
 	}
 	return ctx, func() {}
 }
 
-// prepareGlobals merges globals with Go functions for the selected engine.
-func (e *Executor) prepareGlobals(goFunctions map[string]any, engineType EngineType) map[string]any {
-	globals := e.config.Globals
-	if globals == nil {
-		globals = make(map[string]any)
+// globalsFor returns the globals map for the selected engine, layering the
+// per-call overrides on top of the executor's cached base map. For GOJA the
+// base includes Go-backed function bindings. For Bun the base is just the
+// configured Globals — TSCode has already been prepended as the prelude.
+//
+// If overrides is nil the cached base map is returned directly (callers must
+// not mutate it). Otherwise a fresh merged map is returned.
+func (e *Executor) globalsFor(engineType EngineType, overrides map[string]any) map[string]any {
+	base := e.config.Globals
+	if engineType == EngineGOJA {
+		base = e.gojaGlobals
 	}
-
-	// For GOJA: merge Go functions into globals for performance
-	// TSCode is already transpiled into the JS, GoFunc overrides it
-	if len(e.config.Functions) > 0 && engineType == EngineGOJA && len(goFunctions) > 0 {
-		merged := make(map[string]any, len(globals)+len(goFunctions))
-		maps.Copy(merged, globals)
-		maps.Copy(merged, goFunctions)
-		return merged
+	if len(overrides) == 0 {
+		return base
 	}
-
-	return globals
+	merged := make(map[string]any, len(base)+len(overrides))
+	maps.Copy(merged, base)
+	maps.Copy(merged, overrides)
+	return merged
 }
 
 // mapExecutionError maps errors through source maps when available.
@@ -531,58 +589,27 @@ func (e *Executor) getEngine(engineType EngineType) (engine.Engine, error) {
 	}
 }
 
-// getOrCreateGOJA returns the GOJA engine, creating it if necessary.
+// getOrCreateGOJA returns the GOJA engine, creating it at most once.
 func (e *Executor) getOrCreateGOJA() (*goja.Engine, error) {
-	// Fast path: read lock to check if engine exists
-	e.mu.RLock()
-	if e.gojaEng != nil {
-		eng := e.gojaEng
-		e.mu.RUnlock()
-		return eng, nil
-	}
-	e.mu.RUnlock()
-
-	// Slow path: write lock to create engine
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if e.gojaEng == nil {
+	e.gojaOnce.Do(func() {
 		e.gojaEng = goja.New(goja.Config{
 			PoolSize: e.config.PoolSize,
 		})
-	}
+	})
 	return e.gojaEng, nil
 }
 
-// getOrCreateBun returns the Bun engine, creating it if necessary.
+// getOrCreateBun returns the Bun engine, creating it at most once.
+// Initialization errors are memoized so repeat callers see the same failure.
 func (e *Executor) getOrCreateBun() (*bun.Engine, error) {
-	// Fast path: read lock to check if engine exists
-	e.mu.RLock()
-	if e.bunEng != nil {
-		eng := e.bunEng
-		e.mu.RUnlock()
-		return eng, nil
-	}
-	e.mu.RUnlock()
-
-	// Slow path: write lock to create engine
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	// Double-check after acquiring write lock
-	if e.bunEng == nil {
-		eng, err := bun.New(bun.Config{
+	e.bunOnce.Do(func() {
+		e.bunEng, e.bunInitErr = bun.New(bun.Config{
 			PoolSize:         e.config.PoolSize,
 			Security:         e.config.Security,
 			BackgroundWarmup: e.config.BackgroundWarmup,
 		})
-		if err != nil {
-			return nil, err
-		}
-		e.bunEng = eng
-	}
-	return e.bunEng, nil
+	})
+	return e.bunEng, e.bunInitErr
 }
 
 // ============================================================================
@@ -635,8 +662,8 @@ func (e *Executor) Close() error {
 func (e *Executor) Stats() types.ExecutorStats {
 	cacheSize, cacheCapacity := e.transpiler.CacheStats()
 
-	e.mu.RLock()
-	defer e.mu.RUnlock()
+	e.mu.Lock()
+	defer e.mu.Unlock()
 
 	return types.ExecutorStats{
 		EngineConfigured:        e.config.Engine,
@@ -702,8 +729,21 @@ func MonacoClientScript() string {
 // ============================================================================
 
 // Contract represents the extracted contract from a TypeScript script.
-// It includes the output type definition and expected inputs.
+// It includes the output type definition and expected inputs. The Source
+// field tells you whether the contract came from the TypeScript Compiler API
+// (ContractSourceTSCompiler, most accurate) or the Go-based heuristic
+// fallback (ContractSourceHeuristic, best-effort).
 type Contract = contract.Contract
+
+// ContractSource identifies which analyzer produced a Contract.
+type ContractSource = contract.ContractSource
+
+const (
+	// ContractSourceTSCompiler indicates the Contract was produced by the TypeScript Compiler API (requires Bun).
+	ContractSourceTSCompiler = contract.SourceTSCompiler
+	// ContractSourceHeuristic indicates the Contract was produced by the Go-based heuristic analyzer.
+	ContractSourceHeuristic = contract.SourceHeuristic
+)
 
 // TypeDef represents a TypeScript type definition.
 type TypeDef = contract.TypeDef
@@ -822,7 +862,8 @@ func inferenceResultToContract(result *typeinfer.InferenceResult) *Contract {
 	}
 
 	return &Contract{
-		Name: "Result",
-		Type: typeDef,
+		Name:   "Result",
+		Type:   typeDef,
+		Source: contract.SourceTSCompiler,
 	}
 }
