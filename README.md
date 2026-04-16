@@ -10,38 +10,39 @@ tsgo enables **platforms** built in Go to safely execute **user-defined TypeScri
 
 ```mermaid
 flowchart TB
-    subgraph Platform ["Go Platform (Backend)"]
-        direction TB
-        Engine["tsgo Engine"]
-        Contracts["Contract Analyzer"]
+    subgraph Platform ["🔧 Go Platform"]
         TypeDefs["Type Definitions"]
+        Contracts["Contract Analyzer"]
         Runtime["Runtime Executor"]
+        Engine["tsgo Engine"]
     end
 
-    subgraph Editor ["Monaco Editor (Frontend)"]
-        direction TB
+    subgraph Editor ["✏️ Monaco Editor"]
         Monaco["TypeScript Editor"]
-        Intellisense["IntelliSense"]
         ContractView["Contract Preview"]
         Mapper["Output Mapper"]
     end
 
-    subgraph Business ["Business Context"]
-        Inputs["Inputs"]
-        Outputs["Outputs"]
-        Objects["Business Objects"]
+    subgraph Business ["📦 Business Context"]
+        Inputs(["Inputs"])
+        Objects(["Business Objects"])
+        Outputs(["Outputs"])
     end
 
-    TypeDefs -->|"Types & Globals"| Monaco
-    Monaco -->|"User Script"| Contracts
-    Contracts -->|"Result Schema"| ContractView
+    TypeDefs -->|"types & globals"| Monaco
+    Monaco -->|"user script"| Contracts
+    Contracts -->|"result schema"| ContractView
     ContractView --> Mapper
-    Mapper -->|"Mapped to"| Objects
+    Mapper -->|"mapped to"| Objects
 
-    Inputs -->|"Injected as globals"| Runtime
-    Objects -->|"Script reference"| Runtime
-    Runtime -->|"Execute"| Engine
-    Engine -->|"Result"| Outputs
+    Inputs -->|"injected as globals"| Runtime
+    Objects --> Runtime
+    Runtime --> Engine
+    Engine -->|"result"| Outputs
+
+    style Platform fill:#1e3a5f,stroke:#4a90d9,color:#fff
+    style Editor  fill:#1e3a2f,stroke:#4a9d6f,color:#fff
+    style Business fill:#3a2a1e,stroke:#c47a3a,color:#fff
 ```
 
 ### How It Works
@@ -161,28 +162,18 @@ func main() {
 
 ### Engine Selection Guide
 
-```
-┌─────────────────────────────────────────────────────────────┐
-│                    Need async/await?                        │
-└─────────────────────────────────────────────────────────────┘
-                          │
-              ┌───────────┴───────────┐
-              │                       │
-             Yes                      No
-              │                       │
-              ▼                       ▼
-        ┌─────────┐         ┌─────────────────────┐
-        │   Bun   │         │ CPU-intensive work? │
-        └─────────┘         └─────────────────────┘
-                                      │
-                          ┌───────────┴───────────┐
-                          │                       │
-                         Yes                      No
-                          │                       │
-                          ▼                       ▼
-                    ┌─────────┐             ┌─────────┐
-                    │   Bun   │             │  GOJA   │
-                    └─────────┘             └─────────┘
+```mermaid
+flowchart TD
+    A{async/await?} -->|Yes| Bun
+    A -->|No| B{CPU-intensive?}
+    B -->|Yes| Bun
+    B -->|No| GOJA
+
+    GOJA:::goja
+    Bun:::bun
+
+    classDef goja fill:#1e3a5f,stroke:#4a90d9,color:#fff
+    classDef bun   fill:#1e3a2f,stroke:#4a9d6f,color:#fff
 ```
 
 **GOJA** - Best for simple expressions, high concurrency, pure Go deployments  
@@ -277,12 +268,6 @@ logger := slog.New(slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{
 executor := tsgo.New(
     tsgo.WithDebugLogger(logger),
 )
-
-// Logs include:
-// - Engine selection decisions
-// - Transpilation cache hits/misses
-// - Execution timing breakdown
-// - Error details with source mapping
 ```
 
 ### Runtime Introspection
@@ -296,11 +281,6 @@ fmt.Printf("Engine configured: %v\n", stats.EngineConfigured)
 fmt.Printf("GOJA active: %v\n", stats.GOJAActive)
 fmt.Printf("Bun active: %v\n", stats.BunActive)
 ```
-
-This is useful for:
-- Health checks and monitoring dashboards
-- Capacity planning (tracking engine initialization)
-- Debugging engine selection issues
 
 ### Background Warmup (Bun Engine)
 
@@ -684,31 +664,6 @@ const config: Config;
 // Functions available
 function sum(x: number, y: number): number;
 function multiply(x: number, y: number): number;
-```
-
-## Project Structure
-
-```
-github.com/koltyakov/tsgo
-├── tsgo.go                 # Public API: Executor, Options, TypeBuilder, MonacoHandler
-├── internal/
-│   ├── types/              # Core types: EngineType, Result, Config, SecurityPolicy
-│   ├── engine/             # Execution engine interface
-│   │   ├── goja/           # GOJA engine: pure Go, sync only, pooled runtimes
-│   │   └── bun/            # Bun engine: external process pool, async support
-│   ├── transpiler/         # TypeScript → JavaScript via esbuild
-│   ├── selector/           # Automatic engine selection based on code analysis
-│   ├── sandbox/            # Security validation (restricted globals)
-│   ├── sourcemap/          # Source map parsing and error mapping
-│   ├── typegen/            # TypeScript type definition builder
-│   ├── contract/           # Contract extraction: TypeScript types + JSON Schema
-│   ├── monaco/             # Monaco editor WebSocket integration
-│   └── benchmark/          # Performance benchmarks and comparison tests
-└── cmd/
-    ├── basic/              # Basic usage example
-    ├── functions/          # Function injection example (TSCode + GoFunc)
-    ├── monaco/             # Monaco playground (make monaco)
-    └── benchmark/          # Statistical benchmark runner
 ```
 
 ## License
