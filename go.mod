@@ -1,6 +1,6 @@
 module github.com/koltyakov/tsgo
 
-go 1.26.2
+go 1.25.0
 
 require (
 	github.com/dop251/goja v0.0.0-20260311135729-065cd970411c

@@ -48,10 +48,6 @@ fmt:
 
 # Run linter (requires golangci-lint)
 lint:
-	HOME=$(LINT_HOME) \
-	GOCACHE=$(LINT_GOCACHE) \
-	GOLANGCI_LINT_CACHE=$(LINT_GOLANGCI_CACHE) \
-	GOMODCACHE=$(LINT_GOMODCACHE) \
 	golangci-lint run ./...
 
 # Tidy dependencies

@@ -18,7 +18,7 @@ import (
 
 // GenerateContextDTS generates TypeScript declarations for global context values.
 func GenerateContextDTS(globals map[string]any) string {
-	var sb strings.Builder
+	var sb = &strings.Builder{}
 
 	sb.WriteString("declare global {\n")
 
@@ -32,7 +32,7 @@ func GenerateContextDTS(globals map[string]any) string {
 	for _, name := range keys {
 		value := globals[name]
 		tsType := goToTSType(value)
-		sb.WriteString(fmt.Sprintf("  const %s: %s;\n", name, tsType))
+		fmt.Fprintf(sb, "  const %s: %s;\n", name, tsType)
 	}
 
 	sb.WriteString("}\n\nexport {}\n")
@@ -105,8 +105,8 @@ func NewBuilder() *Builder {
 
 // AddInterface adds an interface definition.
 func (b *Builder) AddInterface(name string, fields map[string]string) *Builder {
-	var sb strings.Builder
-	sb.WriteString(fmt.Sprintf("interface %s {\n", name))
+	var sb = &strings.Builder{}
+	fmt.Fprintf(sb, "interface %s {\n", name)
 
 	// Sort for consistent output
 	keys := make([]string, 0, len(fields))
@@ -117,7 +117,7 @@ func (b *Builder) AddInterface(name string, fields map[string]string) *Builder {
 
 	for _, field := range keys {
 		tsType := fields[field]
-		sb.WriteString(fmt.Sprintf("  %s: %s;\n", field, tsType))
+		fmt.Fprintf(sb, "  %s: %s;\n", field, tsType)
 	}
 
 	sb.WriteString("}")
@@ -133,11 +133,11 @@ func (b *Builder) AddGlobal(name, tsType string) *Builder {
 
 // AddFunction adds a function declaration.
 func (b *Builder) AddFunction(name, params, returnType, doc string) *Builder {
-	var sb strings.Builder
+	var sb = &strings.Builder{}
 	if doc != "" {
-		sb.WriteString(fmt.Sprintf("/** %s */\n", doc))
+		fmt.Fprintf(sb, "/** %s */\n", doc)
 	}
-	sb.WriteString(fmt.Sprintf("function %s(%s): %s;", name, params, returnType))
+	fmt.Fprintf(sb, "function %s(%s): %s;", name, params, returnType)
 	b.functions = append(b.functions, sb.String())
 	return b
 }

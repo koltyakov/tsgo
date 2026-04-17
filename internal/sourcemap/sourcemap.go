@@ -149,7 +149,7 @@ var locationPattern = regexp.MustCompile(`(?:(?:at\s+)?\(?)([^:\s()]+)?:?(\d+):(
 
 // mapErrorLocations finds and maps all locations in an error string.
 func mapErrorLocations(errStr string, sm *SourceMap) string {
-	var result strings.Builder
+	var result = &strings.Builder{}
 	lastEnd := 0
 
 	for _, match := range locationPattern.FindAllStringSubmatchIndex(errStr, -1) {
@@ -173,9 +173,9 @@ func mapErrorLocations(errStr string, sm *SourceMap) string {
 
 		// Build the mapped location string
 		if source != "" {
-			result.WriteString(fmt.Sprintf("%s:%d:%d", source, origLine, origCol))
+			fmt.Fprintf(result, "%s:%d:%d", source, origLine, origCol)
 		} else {
-			result.WriteString(fmt.Sprintf("%d:%d", origLine, origCol))
+			fmt.Fprintf(result, "%d:%d", origLine, origCol)
 		}
 
 		lastEnd = match[1]
