@@ -73,7 +73,7 @@ func reflectToTS(t reflect.Type) string {
 		return fmt.Sprintf("Record<%s, %s>", keyType, valType)
 	case reflect.Struct:
 		return "object"
-	case reflect.Ptr:
+	case reflect.Pointer:
 		return reflectToTS(t.Elem()) + " | null"
 	case reflect.Interface:
 		return "any"

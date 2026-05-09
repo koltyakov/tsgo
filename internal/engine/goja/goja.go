@@ -104,6 +104,7 @@ func (e *Engine) Execute(ctx context.Context, code string, globals map[string]an
 	defer release()
 
 	rt := pooledRT.runtime
+	rt.ClearInterrupt()
 
 	// Set up cancellation for contexts with deadlines
 	if _, hasDeadline := ctx.Deadline(); hasDeadline {
