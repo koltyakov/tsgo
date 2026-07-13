@@ -7,8 +7,8 @@
  * for accurate type information with full type expansion.
  */
 
-// @ts-ignore - TypeScript module available at runtime via Bun
-import ts from 'typescript';
+// @ts-ignore - Bun resolves this versioned package at runtime
+import ts from 'typescript@6.0.3';
 
 // Bun runtime globals
 declare const Bun: {

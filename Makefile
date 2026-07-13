@@ -1,4 +1,4 @@
-.PHONY: build test test-v bench bench-all lint fmt clean help
+.PHONY: build test test-v bench bench-all lint fmt tidy deps-update clean help
 
 # Default target
 all: build
@@ -54,6 +54,11 @@ lint:
 tidy:
 	go mod tidy
 
+# Update dependencies
+deps-update:
+	go get -u ./...
+	go mod tidy
+
 # Run Monaco editor example
 monaco:
 	@echo "Starting Monaco editor at http://localhost:8080"
@@ -94,4 +99,5 @@ help:
 	@echo "  fmt             - Format code"
 	@echo "  lint            - Run linter"
 	@echo "  tidy            - Tidy dependencies"
+	@echo "  deps-update     - Update dependencies"
 	@echo "  clean           - Clean build artifacts"
